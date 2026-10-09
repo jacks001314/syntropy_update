@@ -17,7 +17,10 @@ type componentArtifact struct {
 	OS       string `json:"os"`
 	SHA256   string `json:"sha256"`
 	Size     int64  `json:"size"`
-	URL      string `json:"url"`
+	// Slot 是制品在发布里的槽位：产品组件靠它区分 desktop/mbot/nbot/node-repl/
+	// app-server，其余组件等于组件名本身。客户端按 (slot, os, arch) 选件。
+	Slot string `json:"slot"`
+	URL  string `json:"url"`
 }
 
 // componentPayload 是集群组件（mbot/nbot/codex/...）清单的签名载荷。
@@ -65,6 +68,7 @@ func (s *Service) componentArtifacts(releaseID string) ([]componentArtifact, err
 			OS:       artifact.OS,
 			SHA256:   artifact.SHA256,
 			Size:     artifact.Size,
+			Slot:     artifact.Slot,
 			URL:      s.cfg.PublicBaseURL + "/v1/blobs/" + artifact.BlobSHA256,
 		})
 	}

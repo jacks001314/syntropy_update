@@ -84,7 +84,7 @@ func TestAdminArtifactDownload(t *testing.T) {
 	client := server.Client()
 	admin := map[string]string{"Authorization": "Bearer admin-secret", "Content-Type": "application/json"}
 
-	body, _ := json.Marshal(map[string]any{"component": "desktop", "version": "0.4.0", "channel": "beta", "publish": true})
+	body, _ := json.Marshal(map[string]any{"component": "product", "version": "0.4.0", "channel": "beta", "publish": true})
 	response, content := doRequest(t, client, http.MethodPost, server.URL+"/v1/admin/releases", body, admin)
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("create release status = %d body = %s", response.StatusCode, content)
@@ -99,7 +99,7 @@ func TestAdminArtifactDownload(t *testing.T) {
 	payload := []byte("windows-installer-payload")
 	sum := sha256.Sum256(payload)
 	digest := hex.EncodeToString(sum[:])
-	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/windows/amd64", payload, map[string]string{
+	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/desktop/windows/amd64", payload, map[string]string{
 		"Authorization": "Bearer admin-secret",
 		"X-Filename":    "SyntropySetup.exe",
 		"X-Sha256":      digest,
@@ -142,7 +142,7 @@ func TestAdminArtifactDownload(t *testing.T) {
 }
 
 // TestAdminContentArtifactRoundTrip：平台无关制品没有 os/arch，而路由段不能为空，
-// 所以上传走 artifacts/any/any 这个哨兵。管理页就按这条路径上传，这里把它钉住。
+// 所以上传走 artifacts/<槽位>/any/any 这个哨兵。管理页就按这条路径上传，这里把它钉住。
 func TestAdminContentArtifactRoundTrip(t *testing.T) {
 	server, cleanup := newTestServer(t)
 	defer cleanup()
@@ -168,7 +168,7 @@ func TestAdminContentArtifactRoundTrip(t *testing.T) {
 	payload := []byte("fake-tarball-bytes")
 	sum := sha256.Sum256(payload)
 	digest := hex.EncodeToString(sum[:])
-	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/any/any", payload, map[string]string{
+	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/templates/any/any", payload, map[string]string{
 		"Authorization": "Bearer admin-secret",
 		"X-Filename":    "templates-1.0.0.tar.gz",
 		"X-Sha256":      digest,
@@ -193,7 +193,7 @@ func TestAdminContentArtifactRoundTrip(t *testing.T) {
 	}
 
 	// 内容组件的制品名必须严格等于 <组件>-<版本>.tar.gz。
-	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/any/any", payload, map[string]string{
+	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/templates/any/any", payload, map[string]string{
 		"Authorization": "Bearer admin-secret",
 		"X-Filename":    "templates.tar.gz",
 	})
@@ -202,7 +202,7 @@ func TestAdminContentArtifactRoundTrip(t *testing.T) {
 	}
 
 	// 平台制品不能落在内容组件上（反向也要挡住）。
-	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/linux/amd64", payload, map[string]string{
+	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/templates/linux/amd64", payload, map[string]string{
 		"Authorization": "Bearer admin-secret",
 	})
 	if response.StatusCode != http.StatusBadRequest {

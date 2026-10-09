@@ -9,7 +9,7 @@
  * 否则结构测试会把它当成一条不存在的路由。
  */
 const API = {
-  artifact: "PUT /v1/admin/releases/{id}/artifacts/{os}/{arch}",
+  artifact: "PUT /v1/admin/releases/{id}/artifacts/{slot}/{os}/{arch}",
   artifactDownload: "GET /v1/admin/artifacts/{sha256}",
   audit: "GET /v1/admin/audit",
   component: "POST /v1/admin/components",
@@ -34,7 +34,7 @@ const API = {
 
 const TOKEN_KEY = "syntropy-update-admin-token";
 const CHANNELS = ["stable", "beta", "alpha"];
-const KINDS = ["binary", "archive", "installer", "content"];
+const KINDS = ["product", "binary", "archive", "installer", "content"];
 const VERSIONING = ["product", "independent"];
 const APPROVALS = ["auto", "confirm", "manual"];
 const RESULT_LABEL = {
@@ -51,8 +51,10 @@ const RESULT_TONE = {
 };
 const PLATFORMS = ["windows", "linux", "darwin"];
 const ARCHES = ["amd64", "arm64"];
+/** PRODUCT_SLOTS 是产品组件（product）的槽位：一次产品发布里各成员各占一个。 */
+const PRODUCT_SLOTS = ["desktop", "mbot", "nbot", "node-repl", "app-server"];
 
-const KIND_LABEL = { binary: "二进制", archive: "压缩包", installer: "安装器", content: "内容制品" };
+const KIND_LABEL = { binary: "二进制", archive: "压缩包", installer: "安装器", content: "内容制品", product: "产品" };
 const APPROVAL_LABEL = { auto: "自动安装", confirm: "安装前确认", manual: "仅手动" };
 const APPROVAL_TONE = { auto: "ok", confirm: "warn", manual: "info" };
 const ACTION_LABEL = { install: "安装", upgrade: "升级", downgrade: "降级", skip: "跳过" };
@@ -632,8 +634,8 @@ async function componentsView() {
   const { components = [] } = await call(API.components);
   const page = "components";
 
-  const name = textInput("mbot");
-  const display = textInput("Master 二进制");
+  const name = textInput("product");
+  const display = textInput("产品（桌面 + 节点 + 服务）");
   const kind = select(KINDS);
   const versioning = select(VERSIONING);
   const minProduct = textInput("0.4.0");
@@ -701,7 +703,7 @@ async function componentsView() {
     card(
       "登记组件",
       [
-        note("组件是分发的原子单位：先登记，再发布版本，最后进 BOM。重名登记不会覆盖已有组件。"),
+        note("组件是分发的原子单位：先登记，再发布版本，最后进 BOM。重名登记不会覆盖已有组件。受管组件固定为 product 与 codex / node-runtime / templates / skills 四个插件。"),
         el("div", { class: "form-grid" }, [
           field("名称", name),
           field("显示名", display),
@@ -725,7 +727,7 @@ async function componentsView() {
               ),
           }),
         ]),
-        note("类型决定制品形态：content 是平台无关的 .tar.gz（templates/skills），其余按 (os, arch) 上传。"),
+        note("类型决定制品形态：product 的产品发布一次装 desktop / mbot / nbot / node-repl / app-server 五个槽位；content 是平台无关的 .tar.gz（templates/skills）；其余按 (os, arch) 上传。"),
       ],
       { subtitle: "POST /v1/admin/components" },
     ),
@@ -742,7 +744,7 @@ async function releasesView() {
   const components = componentPage.components ?? [];
   const page = "releases";
 
-  const component = textInput("mbot");
+  const component = textInput("product");
   component.setAttribute("list", "component-names");
   const datalist = el(
     "datalist",
@@ -760,7 +762,12 @@ async function releasesView() {
 
   const detail = el("div", {});
   const uploadPanel = (entry) => {
-    const isContent = components.find((item) => item.name === entry.component)?.kind === "content";
+    const definition = components.find((item) => item.name === entry.component);
+    const isContent = definition?.kind === "content";
+    // 产品一次发布里装着 desktop / mbot / nbot / node-repl / app-server 五件：上传时要指明是
+    // 哪一件，槽位就是它们在发布里的身份；其余组件只有一件，槽位就是组件名本身。
+    const isProduct = definition?.kind === "product";
+    const slot = isProduct ? select(PRODUCT_SLOTS) : null;
     const os = select(PLATFORMS);
     const arch = select(ARCHES);
     const file = el("input", { type: "file" });
@@ -779,10 +786,13 @@ async function releasesView() {
           const digest = await sha256Hex(picked);
           const artifact = await call(
             API.artifact,
-            isContent
+            {
               // 路径里不能有空段：any/any 是服务端约定的「这份制品不挑平台」。
-              ? { arch: "any", id: entry.id, os: "any" }
-              : { arch: arch.value, id: entry.id, os: os.value },
+              arch: isContent ? "any" : arch.value,
+              id: entry.id,
+              os: isContent ? "any" : os.value,
+              slot: slot ? slot.value : entry.component,
+            },
             { body: picked, headers: { "X-Filename": picked.name, "X-Sha256": digest } },
           );
           setStatus("已上传 " + artifact.filename + "（" + humanSize(artifact.size) + "）", "ok");
@@ -792,24 +802,28 @@ async function releasesView() {
       "上传制品 · " + entry.component + "@" + entry.version,
       [
         note(
-          isContent
-            ? "内容制品平台无关（上传到 artifacts/any/any）：不要选平台/架构，文件名必须是 " + expectedName + "（顶层即组件目录内容）。"
-            : "按平台上传二进制/安装器；文件名随 X-Filename 一起记录，服务端会核对 sha256。",
+          isProduct
+            ? "产品发布一次装五件：先选槽位（desktop / mbot / nbot / node-repl / app-server），再按平台上传。"
+            : isContent
+              ? "内容制品平台无关（上传到 artifacts/any/any）：不要选平台/架构，文件名必须是 " + expectedName + "（顶层即组件目录内容）。"
+              : "按平台上传二进制/安装器；文件名随 X-Filename 一起记录，服务端会核对 sha256。",
         ),
         el("div", { class: "row" }, [
+          ...(isProduct ? [field("槽位", slot)] : []),
           ...(isContent ? [] : [field("平台", os), field("架构", arch)]),
           field("文件", file),
           submit,
         ]),
       ],
-      { subtitle: "PUT /v1/admin/releases/{id}/artifacts/{os}/{arch}" },
+      { subtitle: "PUT /v1/admin/releases/{id}/artifacts/{slot}/{os}/{arch}" },
     );
   };
 
   const artifactsTable = (artifacts) =>
     table(
-      ["平台", "架构", "文件名", "大小", "sha256", "下载"],
+      ["槽位", "平台", "架构", "文件名", "大小", "sha256", "下载"],
       artifacts.map((artifact) => [
+        mono(artifact.slot ?? "—"),
         artifact.os || "content",
         artifact.arch || "—",
         artifact.filename,
@@ -1013,7 +1027,7 @@ async function distributionsView() {
     ]);
     list.append(row);
   };
-  const quickName = textInput("mbot");
+  const quickName = textInput("product");
   const quickVersion = textInput("1.2.0");
 
   const componentCell = (distribution) => {
@@ -1348,7 +1362,7 @@ async function policiesView() {
   const policies = policyPage.policies ?? [];
   const components = componentPage.components ?? [];
 
-  const component = textInput("mbot");
+  const component = textInput("product");
   component.setAttribute("list", "policy-component-names");
   const datalist = el(
     "datalist",
@@ -1540,7 +1554,7 @@ async function helpView() {
 }
 const PAGES = [
   { key: "overview", label: "概览", title: "服务概览", hint: "组件 / 发布 / 库存 / 计划一眼看完", render: overviewView },
-  { key: "components", label: "组件", title: "组件", hint: "登记受管组件：mbot / nbot / desktop / templates …", render: componentsView },
+  { key: "components", label: "组件", title: "组件", hint: "登记受管组件：product（产品）与 codex / node-runtime / templates / skills", render: componentsView },
   { key: "releases", label: "发布", title: "发布与制品", hint: "新建发布、上传制品、上架与撤回", render: releasesView },
   { key: "distributions", label: "分发定义", title: "分发定义（BOM）", hint: "把各组件版本锁成一个渠道基线", render: distributionsView },
   { key: "inventory", label: "库存", title: "目标库存", hint: "桌面端与节点上报的组件版本", render: inventoryView },

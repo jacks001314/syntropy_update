@@ -18,22 +18,26 @@
 
 ## 2. 组件清单（受管范围）
 
-| 组件名 | 说明 | 分发形态 | 版本线 |
+受管组件只有 5 个：**产品**一个，加四个**插件**。
+
+| 组件名 | 类型 | 成员 / 制品 | 版本线 |
 | --- | --- | --- | --- |
-| `desktop` | Syntropy 桌面应用本体 | 安装器（NSIS/DMG/DEB/RPM） | 产品版本 `0.3.0` |
-| `mbot` | Master 二进制 | 裸二进制 / 归档，按 (os,arch) | 随产品版本 |
-| `nbot` | Node 二进制 | 裸二进制，按 (os,arch) | 随产品版本 |
-| `app-server` | web_backend（App Server） | 裸二进制，宿主平台 | 随产品版本 |
-| `codex` | Codex CLI 运行时归档 | `.tgz`，按 (os,arch) | 独立（当前 `0.160.0`） |
-| `node-repl` | `node_repl` 可执行文件 | 裸二进制，按 (os,arch) | 独立 |
-| `node-runtime` | 随包 Node 解释器 | 裸二进制，按 (os,arch) | 独立 |
-| `browser-runtime` | 受管浏览器运行时归档 | `.tar.gz`，按 (os,arch) | 独立 |
-| `templates` / `skills` | 内容制品（agent 模板、技能） | 平台无关 `.tar.gz` 目录归档（`<组件>-<版本>.tar.gz`），解包后整目录替换 `<组件根>/data/<组件>` | 内容版本（独立） |
+| `product` | 产品 | `desktop` / `mbot` / `nbot` / `node-repl` / `app-server` 五个**槽位** | 产品版本 `0.4.3`（一处：`apps/desktop/package.json`） |
+| `codex` | 插件 | 归档 `.tgz`，按 (os,arch) | 独立，**等于 SDK 的 `GeneratedCodexVersion`**（当前 `0.160.0`） |
+| `node-runtime` | 插件 | 裸二进制，按 (os,arch) | 独立（`node-runtime-release.json`，当前 `24.14.0`） |
+| `templates` | 插件 | 平台无关 `.tar.gz` 目录归档（`templates-<版本>.tar.gz`） | 内容版本（独立） |
+| `skills` | 插件 | 平台无关 `.tar.gz` 目录归档（`skills-<版本>.tar.gz`） | 内容版本（独立） |
 
-约定：`codex` / `node-repl` / `node-runtime` / `browser-runtime` 与产品版本**解耦**，
-各自有独立版本线与渠道；`mbot` / `nbot` / `app-server` / `desktop` 跟随产品版本发版。
+**规则**：产品只有一个版本号、一次发版全部一起出，不允许只发其中一个成员；插件各自有
+版本号，可以随时单独发布并推进 BOM。产品成员不再各自成一行——每次版本变更前后端基本都
+要一起改，拆开发布只换来「漏发一件」这类事故。
 
-`plugins` 走 Master 侧 marketplace（git 镜像），不在本服务的目录归档范围内（见决策 15）。
+槽位是产品内部唯一的区分：制品存 `(slot, os, arch)`，同一个 `(os, arch)` 在产品里会有
+五件（mbot / nbot / node-repl / app-server / desktop），客户端按槽位选件；非产品组件的
+槽位等于组件名本身，于是选件、暂存、换件三处在两类组件上是同一个口径。
+
+`plugins` 与 `browser-runtime` 不在受管清单里：前者走 Master 侧 marketplace（git 镜像，
+见决策 15），后者当前没有生产者，等有产物再作为插件加入，不保留断链（见决策 17）。
 
 ## 3. 总体架构
 
@@ -275,7 +279,9 @@ GET https://app.syntropy-lab.com/v1/components/{component}/manifest?channel=&os=
 
 - `GET|POST /v1/admin/components`
 - `GET|POST /v1/admin/releases`、`GET /v1/admin/releases/{id}`
-- `PUT /v1/admin/releases/{id}/artifacts/{os}/{arch}`（流式上传 + 校验；平台无关制品用 `any/any`）
+- `PUT /v1/admin/releases/{id}/artifacts/{slot}/{os}/{arch}`（流式上传 + 校验；文件名走
+  `X-Filename`、期望摘要走 `X-Sha256`。槽位是必填段：产品一次发布装着多件同平台制品，
+  没有槽位就分不清传的是哪一件；非产品组件的槽位等于组件名，平台无关制品用 `any/any`）
 - `GET /v1/admin/artifacts/{sha256}`（按内容摘要取件，`?filename=` 只决定下载名）
 - `POST /v1/admin/releases/{id}/publish`、`POST /v1/admin/releases/{id}/yank`
 - `GET|POST /v1/admin/distributions`
@@ -438,6 +444,8 @@ syntropy_update/
 | 15 | 内容制品落点 | 制品是平台无关的 `.tar.gz` 目录归档；解包后同时替换两处：部署源树 `<组件根>/data/<组件>`（本地 re-deploy 与远端节点 payload 都从这里取件）与本机 Master 的持久数据目录 `<runData>/master-data/<组件>`（`syntropy_master` 的 `skillsDir` / `templatesDir` 指向它，且 Master 逐次调用读盘，替换即生效、无需重启）。两处各自留备份与回滚；主节点播种时把部署源树当作**优先级更高的数据源**（`--master-data-dir` 指到本机 Master 持久目录，按「持久目录 → 随包 `data`」补缺、已存在的文件不覆盖）；`plugins` 走 Master 侧 marketplace，不在目录归档范围内。**已落地**，见 §17.3 | 本次讨论（依据：`web_backend/service/master` + `syntropy_master/handle/skill` 代码核实） |
 
 | 16 | 443 归属 | 生产 443 归升级服务（内置 ACME 自动签发/续期，走 TLS-ALPN-01，80 不必放行）；同机既有 xray REALITY 挪到 `4430` 并同步安全组与客户端。xray 换非 443 端口会提示「可能被 GFW 封 IP」，是为让出 443 付出的已知代价 | 用户确认（「xray换个端口」） |
+| 17 | 组件模型收敛为 5 行 | 受管组件只有 `product` + `codex` / `node-runtime` / `templates` / `skills`。产品一次发版装五件、共用一个版本号，靠 `slot` 区分；插件可独立升级。`browser-runtime` 移出清单（没有生产者），`node-repl` 归产品。制品键从 `(releaseID, os, arch)` 改为 `(releaseID, slot, os, arch)`，上传路由与清单都带 `slot`；服务端组件表（`internal/model`）与客户端（`component-layout.ts`）由门禁测试锁定一致 | 本次讨论（依据：`../Syntropy/docs/system-upgrade-method.md`） |
+| 18 | 发布链路只有一条 | 本地与 CI 都跑 `desktop_app` 的 `pnpm release:build`（整理发布清单）+ `pnpm release:publish`（`import-bundle -remote`，走管理面 HTTP API）。组件表、槽位与制品命名只由服务端 `bundle.PlanAssets` 一处决定，桌面端脚本不复制第二套规则；本地不再需要人碰服务端数据目录 | 本次讨论 |
 
 ## 17. 实施状态（2026-10-05）
 
@@ -708,3 +716,21 @@ POST 路径与请求体、DELETE 撤销、目标 id / 组件名的 URL 编码、
    还原。跨语言那段另固化为 `tests/fixtures/updates/cluster-bom-content-go-signed.json`
    与 `cluster-bom-content-pubkey.pem`（Go 端 `distribution show` 的真实输出），
    `upgrade-client.test.ts` 直接对它验签并挑件，两侧口径漂移会立刻断掉。
+
+### 17.4 组件模型收敛与远端灌库（2026-10-09）
+
+- **组件模型**：`internal/model` 一处定义 5 个受管组件、`KindProduct` 与 5 个产品槽位
+  （`ProductSlots`）；`internal/bundle` 的 `componentDefs` 随之收敛为 5 行，`PlanAssets` 校验
+  「槽位是否属于这个组件」「制品名是否等于客户端认的那一个」。
+- **制品键**：`artifactKey(releaseID, slot, os, arch)`；管理面路由改为
+  `artifacts/{slot}/{os}/{arch}`；签名清单的制品条目加 `slot`，`/v1/manifest`（桌面自更新）
+  只挑产品里 `desktop` 槽位那一件，`GET /v1/components/{component}/manifest` 对
+  `component == "" || "desktop"` 归一成 `product`，旧调用不破。
+- **远端灌库**：`import-bundle -remote <url>` 走新增的 `internal/adminclient`（实现
+  `bundle.Service` 的管理面 HTTP 客户端），于是「本地写数据目录」与「远端调 API」共用同一段
+  `bundle.Import`。凭证优先 `-token`，否则取配置里 `adminTokens` 的第一项。
+- **回归**：`internal/adminclient/adminclient_test.go` 用真实 `api.Server`（httptest）跑
+  「构建清单 → `PlanAssets` → `Import` → 落库 → 验签 BOM」，并验证第二次重跑只跳过、
+  错误码映射回 `ErrValidation` / `ErrNotFound`。**实测到一次真实缺陷**：`http.Transport`
+  发送完会关闭请求体，而 `bundle.Import` 之后还要自己关那个文件（本地后端不关），
+  于是远端路径会冒 `file already closed`；客户端因此用「只读不关」的壳包一层请求体。

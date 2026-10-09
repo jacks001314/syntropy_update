@@ -90,7 +90,7 @@ func TestAdminRequiresToken(t *testing.T) {
 	server, cleanup := newTestServer(t)
 	defer cleanup()
 	client := server.Client()
-	body, _ := json.Marshal(map[string]any{"component": "desktop", "version": "0.4.0", "channel": "beta"})
+	body, _ := json.Marshal(map[string]any{"component": "product", "version": "0.4.0", "channel": "beta"})
 	response, _ := doRequest(t, client, http.MethodPost, server.URL+"/v1/admin/releases", body, nil)
 	if response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401", response.StatusCode)
@@ -104,7 +104,7 @@ func TestPublishUploadManifestAndBlob(t *testing.T) {
 	adminHeaders := map[string]string{"Authorization": "Bearer admin-secret", "Content-Type": "application/json"}
 
 	body, _ := json.Marshal(map[string]any{
-		"component": "desktop",
+		"component": "product",
 		"version":   "0.4.0",
 		"channel":   "beta",
 		"publish":   true,
@@ -128,13 +128,13 @@ func TestPublishUploadManifestAndBlob(t *testing.T) {
 		"X-Filename":    "SyntropySetup.exe",
 		"X-Sha256":      digest,
 	}
-	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/windows/amd64", artifactBytes, uploadHeaders)
+	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/desktop/windows/amd64", artifactBytes, uploadHeaders)
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("upload status = %d body = %s", response.StatusCode, content)
 	}
 
 	// 摘要不符必须被拒绝。
-	response, _ = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/darwin/arm64", []byte("x"), map[string]string{
+	response, _ = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/desktop/darwin/arm64", []byte("x"), map[string]string{
 		"Authorization": "Bearer admin-secret",
 		"X-Sha256":      strings.Repeat("0", 64),
 	})
@@ -211,7 +211,7 @@ func TestComponentManifestAndDistributionEndpoints(t *testing.T) {
 	client := server.Client()
 	adminHeaders := map[string]string{"Authorization": "Bearer admin-secret", "Content-Type": "application/json"}
 
-	createBody, _ := json.Marshal(map[string]any{"component": "mbot", "version": "1.2.0", "channel": "stable", "publish": true})
+	createBody, _ := json.Marshal(map[string]any{"component": "product", "version": "1.2.0", "channel": "stable", "publish": true})
 	response, content := doRequest(t, client, http.MethodPost, server.URL+"/v1/admin/releases", createBody, adminHeaders)
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("create component release status = %d body = %s", response.StatusCode, content)
@@ -226,7 +226,7 @@ func TestComponentManifestAndDistributionEndpoints(t *testing.T) {
 	binary := []byte("mbot-binary")
 	sum := sha256.Sum256(binary)
 	digest := hex.EncodeToString(sum[:])
-	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/linux/amd64", binary, map[string]string{
+	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/releases/"+created.ID+"/artifacts/mbot/linux/amd64", binary, map[string]string{
 		"Authorization": "Bearer admin-secret",
 		"X-Filename":    "mbot-linux-amd64",
 		"X-Sha256":      digest,
@@ -244,7 +244,7 @@ func TestComponentManifestAndDistributionEndpoints(t *testing.T) {
 		t.Fatalf("parse pubkey: %v", err)
 	}
 
-	response, content = doRequest(t, client, http.MethodGet, server.URL+"/v1/components/mbot/manifest?channel=stable", nil, nil)
+	response, content = doRequest(t, client, http.MethodGet, server.URL+"/v1/components/product/manifest?channel=stable", nil, nil)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("component manifest status = %d body = %s", response.StatusCode, content)
 	}
@@ -259,7 +259,7 @@ func TestComponentManifestAndDistributionEndpoints(t *testing.T) {
 	distributionBody, _ := json.Marshal(map[string]any{
 		"channel":        "stable",
 		"productVersion": "1.2.0",
-		"components":     []map[string]string{{"name": "mbot", "version": "1.2.0"}},
+		"components":     []map[string]string{{"name": "product", "version": "1.2.0"}},
 	})
 	response, content = doRequest(t, client, http.MethodPost, server.URL+"/v1/admin/distributions", distributionBody, adminHeaders)
 	if response.StatusCode != http.StatusCreated {
@@ -315,12 +315,12 @@ func TestPlanPolicyAndInventoryEndpoints(t *testing.T) {
 	client := server.Client()
 	adminHeaders := map[string]string{"Authorization": "Bearer admin-secret", "Content-Type": "application/json"}
 
-	componentBody, _ := json.Marshal(map[string]any{"name": "mbot", "kind": "binary", "versioning": "semver"})
+	componentBody, _ := json.Marshal(map[string]any{"name": "product", "kind": "product", "versioning": "product"})
 	response, content := doRequest(t, client, http.MethodPost, server.URL+"/v1/admin/components", componentBody, adminHeaders)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("put component status = %d body = %s", response.StatusCode, content)
 	}
-	releaseBody, _ := json.Marshal(map[string]any{"component": "mbot", "version": "1.2.0", "channel": "stable", "publish": true})
+	releaseBody, _ := json.Marshal(map[string]any{"component": "product", "version": "1.2.0", "channel": "stable", "publish": true})
 	response, content = doRequest(t, client, http.MethodPost, server.URL+"/v1/admin/releases", releaseBody, adminHeaders)
 	if response.StatusCode != http.StatusCreated {
 		t.Fatalf("create release status = %d body = %s", response.StatusCode, content)
@@ -330,7 +330,7 @@ func TestPlanPolicyAndInventoryEndpoints(t *testing.T) {
 		return []map[string]any{{
 			"id":         "node-a",
 			"kind":       "node",
-			"components": map[string]string{"mbot": version},
+			"components": map[string]string{"product": version},
 		}}
 	}
 
@@ -357,7 +357,7 @@ func TestPlanPolicyAndInventoryEndpoints(t *testing.T) {
 
 	// 灰度百分比为 0 时计划项进入 deferred。
 	policyBody, _ := json.Marshal(map[string]any{"approval": "confirm", "percentage": 0})
-	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/policies/mbot/stable", policyBody, adminHeaders)
+	response, content = doRequest(t, client, http.MethodPut, server.URL+"/v1/admin/policies/product/stable", policyBody, adminHeaders)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("set policy status = %d body = %s", response.StatusCode, content)
 	}
@@ -369,7 +369,7 @@ func TestPlanPolicyAndInventoryEndpoints(t *testing.T) {
 	if err := json.Unmarshal(content, &savedPolicy); err != nil {
 		t.Fatalf("unmarshal policy: %v", err)
 	}
-	if savedPolicy.Component != "mbot" || savedPolicy.Channel != "stable" || savedPolicy.Percentage != 0 {
+	if savedPolicy.Component != "product" || savedPolicy.Channel != "stable" || savedPolicy.Percentage != 0 {
 		t.Fatalf("unexpected policy %+v", savedPolicy)
 	}
 
@@ -395,12 +395,12 @@ func TestPlanPolicyAndInventoryEndpoints(t *testing.T) {
 	if err := json.Unmarshal(content, &policies); err != nil {
 		t.Fatalf("unmarshal policies: %v", err)
 	}
-	if len(policies.Policies) != 1 || policies.Policies[0].Component != "mbot" {
+	if len(policies.Policies) != 1 || policies.Policies[0].Component != "product" {
 		t.Fatalf("unexpected policies %+v", policies.Policies)
 	}
 
 	// 单目标库存上报与列表。
-	inventoryBody, _ := json.Marshal(map[string]any{"kind": "node", "components": map[string]string{"mbot": "1.0.0"}})
+	inventoryBody, _ := json.Marshal(map[string]any{"kind": "node", "components": map[string]string{"product": "1.0.0"}})
 	response, content = doRequest(t, client, http.MethodPost, server.URL+"/v1/inventory/node-b", inventoryBody, nil)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("report inventory status = %d body = %s", response.StatusCode, content)

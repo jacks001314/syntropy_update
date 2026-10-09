@@ -3,3 +3,4 @@
 /keys/
 /.work/
 *.db
+/deploy/syntropy-update

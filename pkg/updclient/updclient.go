@@ -30,7 +30,10 @@ type Artifact struct {
 	OS       string
 	SHA256   string
 	Size     int64
-	URL      string
+	// Slot 是制品在发布里的槽位：产品（product）靠它区分 desktop / mbot / nbot /
+	// node-repl / app-server，其余组件的槽位等于组件名本身。
+	Slot string
+	URL  string
 }
 
 // Manifest 是校验通过后的组件清单。
@@ -47,16 +50,36 @@ type Manifest struct {
 
 // Pick 返回指定 (os, arch) 的制品；这个平台没有制品时，回落到与平台无关的那一件
 // （templates / skills 这类内容制品，清单里 os/arch 都为空）。
+//
+// 只在「这个平台上只有一件」时才能用它定装哪一份：产品（product）清单一个平台上有
+// mbot / nbot / node-repl / app-server 好几件，用 Pick 会挑到别人，得用 PickSlot。
 func (m Manifest) Pick(platformOS, arch string) (Artifact, bool) {
 	if platformOS != "" || arch != "" {
+		var matches []Artifact
 		for _, artifact := range m.Artifacts {
 			if artifact.OS == platformOS && artifact.Arch == arch {
-				return artifact, true
+				matches = append(matches, artifact)
 			}
+		}
+		if len(matches) == 1 {
+			return matches[0], true
+		}
+		if len(matches) > 1 {
+			return Artifact{}, false
 		}
 	}
 	for _, artifact := range m.Artifacts {
 		if artifact.OS == "" && artifact.Arch == "" {
+			return artifact, true
+		}
+	}
+	return Artifact{}, false
+}
+
+// PickSlot 按槽位取件：(slot, os, arch) 才是清单里制品的唯一键；产品清单必须用它。
+func (m Manifest) PickSlot(slot, platformOS, arch string) (Artifact, bool) {
+	for _, artifact := range m.Artifacts {
+		if artifact.Slot == slot && artifact.OS == platformOS && artifact.Arch == arch {
 			return artifact, true
 		}
 	}
@@ -79,6 +102,7 @@ type componentPayload struct {
 		OS       string `json:"os"`
 		SHA256   string `json:"sha256"`
 		Size     int64  `json:"size"`
+		Slot     string `json:"slot"`
 		URL      string `json:"url"`
 	} `json:"artifacts"`
 	Channel                 string `json:"channel"`
@@ -194,6 +218,7 @@ func (c *Client) FetchComponentManifest(ctx context.Context, component string) (
 			OS:       entry.OS,
 			SHA256:   entry.SHA256,
 			Size:     entry.Size,
+			Slot:     entry.Slot,
 			URL:      entry.URL,
 		})
 	}

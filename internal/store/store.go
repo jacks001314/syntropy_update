@@ -178,14 +178,14 @@ func (s *Store) FindRelease(component, channel, version string) (model.Release, 
 	return model.Release{}, ErrNotFound
 }
 
-func artifactKey(releaseID, platformOS, arch string) string {
-	return releaseID + "/" + platformOS + "/" + arch
+func artifactKey(releaseID, slot, platformOS, arch string) string {
+	return releaseID + "/" + slot + "/" + platformOS + "/" + arch
 }
 
 // PutArtifact 写入制品元数据。
 func (s *Store) PutArtifact(artifact model.Artifact) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		return putJSON(tx.Bucket(bucketArtifacts), artifactKey(artifact.ReleaseID, artifact.OS, artifact.Arch), artifact)
+		return putJSON(tx.Bucket(bucketArtifacts), artifactKey(artifact.ReleaseID, artifact.Slot, artifact.OS, artifact.Arch), artifact)
 	})
 }
 

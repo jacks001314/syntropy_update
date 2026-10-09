@@ -17,8 +17,12 @@ import (
 	"syntropy_update/internal/store"
 )
 
-// DesktopComponent 是桌面应用本体的组件名。
-const DesktopComponent = "desktop"
+// DesktopComponent 是桌面应用在产品组件里的槽位名。自更新清单（/v1/manifest）从产品
+// 发布里挑这一个槽位的制品，所以它不再是「一个组件」，而是产品里的一件。
+const DesktopComponent = model.SlotDesktop
+
+// slotPattern 限制制品槽位名，口径与客户端（component-layout.ts）的组件名一致。
+var slotPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 var versionPattern = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$`)
 
@@ -220,15 +224,49 @@ func (s *Service) componentIsContent(component string) bool {
 	return err == nil && definition.Kind == model.KindContent
 }
 
+// validateArtifactSlot 校验制品槽位。
+//
+// 产品组件（product）的槽位必须是已知成员之一；其余组件（含内容制品）的槽位就是组件名
+// 本身。槽位是「同一份发布里区分制品」的键，放宽它等于让客户端拿着三件 windows/amd64
+// 制品却不知道哪一件是 mbot。
+func validateArtifactSlot(component, slot string, content bool) error {
+	if !slotPattern.MatchString(slot) {
+		return fmt.Errorf("%w: slot %q must match [a-z0-9][a-z0-9._-]{0,63}", ErrValidation, slot)
+	}
+	if content || component != model.ComponentProduct {
+		if slot != component {
+			return fmt.Errorf("%w: %s artifacts must use slot %q, got %q", ErrValidation, component, component, slot)
+		}
+		return nil
+	}
+	for _, known := range model.ProductSlots {
+		if slot == known {
+			return nil
+		}
+	}
+	return fmt.Errorf(
+		"%w: %s has no slot %q (want one of %s)",
+		ErrValidation, component, slot, strings.Join(model.ProductSlots, ", "),
+	)
+}
+
 // UploadArtifact 把制品流写入 blob 仓库并登记元数据。expectedSHA256 非空时校验一致性。
 //
 // 平台组件必须给出 os 与 arch；内容组件（templates / skills）必须两个都为空，且文件名要等于
 // <组件>-<版本>.tar.gz——客户端就按这个名字认件，服务端放行别的名字，等于发了一份装了也没人认
 // 的制品。
-func (s *Service) UploadArtifact(releaseID, platformOS, arch, filename string, expectedSHA256 string, reader io.Reader) (model.Artifact, error) {
+//
+// slot 是制品在这份发布里的槽位：产品组件一次发布装着多个成员，槽位是它们之间唯一的区分；
+// 其余组件的槽位等于组件名本身。槽位跟着制品一起存，客户端才认得出哪一件是 mbot。
+func (s *Service) UploadArtifact(releaseID, slot, platformOS, arch, filename string, expectedSHA256 string, reader io.Reader) (model.Artifact, error) {
 	release, err := s.store.GetRelease(releaseID)
 	if err != nil {
 		return model.Artifact{}, err
+	}
+	slot = strings.TrimSpace(slot)
+	if slot == "" {
+		// 槽位可以不写：非产品组件的槽位就是组件名本身，调用方不必重复一遍。
+		slot = release.Component
 	}
 	platformOS = strings.TrimSpace(platformOS)
 	arch = strings.TrimSpace(arch)
@@ -238,6 +276,9 @@ func (s *Service) UploadArtifact(releaseID, platformOS, arch, filename string, e
 	}
 	content := platformOS == ""
 	isContent := s.componentIsContent(release.Component)
+	if err := validateArtifactSlot(release.Component, slot, content); err != nil {
+		return model.Artifact{}, err
+	}
 	if content && !isContent {
 		return model.Artifact{}, fmt.Errorf(
 			"%w: %s is not a content component, so its artifacts need an os and an arch",
@@ -267,11 +308,12 @@ func (s *Service) UploadArtifact(releaseID, platformOS, arch, filename string, e
 		return model.Artifact{}, fmt.Errorf("%w: sha256 mismatch: got %s want %s", ErrValidation, result.SHA256, expectedSHA256)
 	}
 	if !content && filename == "" {
-		filename = release.Component + "-" + platformOS + "-" + arch
+		filename = slot + "-" + platformOS + "-" + arch
 	}
 	artifact := model.Artifact{
 		ID:          model.NewID("artifact"),
 		ReleaseID:   releaseID,
+		Slot:        slot,
 		OS:          platformOS,
 		Arch:        arch,
 		Filename:    filename,
@@ -353,13 +395,14 @@ func desktopArch(arch string) (string, bool) {
 	}
 }
 
-// Manifest 构建并签名桌面自更新清单。component 为空时使用 desktop。
+// Manifest 构建并签名桌面自更新清单。component 为空（或 legacy 的 desktop）时取产品组件：
+// 桌面端是产品里 desktop 槽位的那一件，自更新清单只挑这个槽位的制品。
 func (s *Service) Manifest(component, channel string) ([]byte, error) {
 	if s.privateKey == nil {
 		return nil, errors.New("release: signing key is not loaded")
 	}
-	if component == "" {
-		component = DesktopComponent
+	if component == "" || component == DesktopComponent {
+		component = model.ComponentProduct
 	}
 	if channel == "" {
 		channel = s.cfg.DefaultChannel
@@ -374,6 +417,9 @@ func (s *Service) Manifest(component, channel string) ([]byte, error) {
 	}
 	entries := make([]desktopArtifact, 0, len(artifacts))
 	for _, artifact := range artifacts {
+		if artifact.Slot != DesktopComponent {
+			continue
+		}
 		platform, ok := desktopPlatform(artifact.OS)
 		if !ok {
 			continue

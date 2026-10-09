@@ -79,7 +79,7 @@ func (s *Server) routes() []route {
 		{"GET /v1/admin/releases", scopeAdmin, s.handleListReleases},
 		{"POST /v1/admin/releases", scopeAdmin, s.handleCreateRelease},
 		{"GET /v1/admin/releases/{id}", scopeAdmin, s.handleGetRelease},
-		{"PUT /v1/admin/releases/{id}/artifacts/{os}/{arch}", scopeAdmin, s.handleUploadArtifact},
+		{"PUT /v1/admin/releases/{id}/artifacts/{slot}/{os}/{arch}", scopeAdmin, s.handleUploadArtifact},
 		// 按内容摘要取回制品：内容制品没有 os/arch，摘要是最稳的键（管理面专用）。
 		{"GET /v1/admin/artifacts/{sha256}", scopeAdmin, s.handleDownloadArtifact},
 		{"POST /v1/admin/releases/{id}/publish", scopeAdmin, s.handlePublishRelease},
@@ -468,12 +468,13 @@ func (s *Server) handleGetRelease(w http.ResponseWriter, r *http.Request) error 
 func (s *Server) handleUploadArtifact(w http.ResponseWriter, r *http.Request) error {
 	releaseID := r.PathValue("id")
 	// 内容制品与 (os,arch) 无关，而路径里不能出现空段，所以用 any 当哨兵：
-	// artifacts/any/any 落到服务端就是「这份制品不挑平台」。
+	// artifacts/<slot>/any/any 落到服务端就是「这份制品不挑平台」。
+	slot := strings.TrimSpace(r.PathValue("slot"))
 	platformOS := platformSegment(r.PathValue("os"))
 	arch := platformSegment(r.PathValue("arch"))
 	filename := r.Header.Get("X-Filename")
 	expectedSHA := strings.TrimSpace(r.Header.Get("X-Sha256"))
-	artifact, err := s.service.UploadArtifact(releaseID, platformOS, arch, filename, expectedSHA, r.Body)
+	artifact, err := s.service.UploadArtifact(releaseID, slot, platformOS, arch, filename, expectedSHA, r.Body)
 	if err != nil {
 		return err
 	}

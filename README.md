@@ -8,8 +8,10 @@ Syntropy 集群的组件分发与升级管理服务。规划中的生产域名�
 ## 职责
 
 - 组件制品仓库：内容寻址 blob 存储，sha256 校验，支持 Range 下载。
-- 组件与版本管理：`mbot` / `nbot` / `app-server` / `codex` / `node-repl` /
-  `node-runtime` / `browser-runtime` / `desktop` / 内容制品。
+- 组件与版本管理：受管组件只有 5 个——产品 `product`（desktop / mbot / nbot /
+  node-repl / app-server 五个槽位一起发版、共用一个版本号）加四个可独立升级的插件
+  `codex` / `node-runtime` / `templates` / `skills`。制品落在产品里的哪个槽位由 `slot`
+  记录，客户端据此选件。口径与门禁见 `../Syntropy/docs/system-upgrade-method.md`。
 - 渠道与分发定义（BOM）：`alpha` / `beta` / `stable`。
 - 签名清单：Ed25519 签名的自更新清单与 BOM，供桌面端与安装器消费。
 - 策略与计划：灰度、维护窗口、审批口径、熔断、回滚；按库存计算升级计划。
@@ -65,18 +67,26 @@ go test ./...
 # 生成签名密钥
 go run ./cmd/syntropy-update keygen -config conf/update.json
 
-# 发布一次桌面版本（上传各平台安装器）
+# 发布一次产品版本：产品一次发五件，靠 -slot 指名是哪一个成员；同 (组件, 渠道, 版本)
+# 再发一次是「补制品」而不是报错——CI 每个平台各跑一次，各自补上自己那几件。
 go run ./cmd/syntropy-update publish -config conf/update.json `
-  -component desktop -version 0.4.0 -channel beta `
+  -component product -kind product -version 0.4.3 -channel beta -slot desktop `
   -artifact "windows/amd64=dist/SyntropySetup.exe" `
   -artifact "darwin/arm64=dist/Syntropy-arm64.dmg"
-
-# 发布集群组件与分发定义（BOM）
 go run ./cmd/syntropy-update publish -config conf/update.json `
-  -component mbot -kind binary -version 1.2.0 -channel stable `
-  -artifact "linux/amd64=dist/mbot-linux-amd64"
+  -component product -version 0.4.3 -channel beta -slot nbot `
+  -artifact "linux/amd64=dist/nbot-linux-amd64"
+
+# 发布可独立升级的插件（槽位等于组件名，可以只发它自己）
+go run ./cmd/syntropy-update publish -config conf/update.json `
+  -component codex -kind archive -version 0.160.0 -channel stable `
+  -artifact "linux/amd64=dist/codex-linux-amd64.tgz"
+
+# 分发定义（BOM）：就 5 行
 go run ./cmd/syntropy-update distribution publish -config conf/update.json `
-  -channel stable -product-version 1.2.0 -component mbot=1.2.0 -component codex=0.160.0
+  -channel stable -product-version 0.4.3 -component product=0.4.3 `
+  -component codex=0.160.0 -component node-runtime=24.14.0 `
+  -component templates=1.0.0 -component skills=1.0.0
 go run ./cmd/syntropy-update distribution show -config conf/update.json -channel stable
 
 # 发布内容制品（templates / skills）：平台无关的 .tar.gz，顶层就是组件目录的内容
@@ -87,27 +97,36 @@ go run ./cmd/syntropy-update publish -config conf/update.json `
 go run ./cmd/syntropy-update distribution publish -config conf/update.json `
   -channel stable -product-version 1.2.0 -component templates=1.2.0
 
-# CI 一次灌库：读桌面构建的 release-manifest.json，内容制品随行（-component-version 覆盖版本）
+# 一次灌库：读桌面构建的 release-manifest.json，把这份构建里的组件一次发出去。
+# 默认写本机数据目录；给 -remote 就改走管理面 HTTP API（凭证默认取配置里的
+# adminTokens，也可以 -token 显式给）——本地发版与 CI 发版是同一条命令、同一段灌库代码。
 go run ./cmd/syntropy-update import-bundle -config conf/update.json `
   -manifest dist/release-manifest.json -channel stable `
   -desktop windows/amd64=dist/SyntropySetup.exe `
   -content templates=templates-1.2.0.tar.gz -component-version templates=1.2.0
+go run ./cmd/syntropy-update import-bundle -config conf/update.json `
+  -manifest dist/release-manifest.json -channel stable `
+  -remote https://app.syntropy-lab.com
+# 先看计划不落库
+go run ./cmd/syntropy-update import-bundle -manifest dist/release-manifest.json -dry-run
+
+# 桌面端发版走的就是上面这条（desktop_app 里 pnpm release:build && pnpm release:publish）
 
 # 设置分发策略、上报库存、计算升级计划
 go run ./cmd/syntropy-update policy set -config conf/update.json `
-  -component mbot -channel stable -approval confirm -percentage 20 -window 18:00-22:00
+  -component product -channel stable -approval confirm -percentage 20 -window 18:00-22:00
 go run ./cmd/syntropy-update policy show -config conf/update.json
 go run ./cmd/syntropy-update inventory report -config conf/update.json `
-  -target node-a -kind node -component mbot=1.1.0
+  -target node-a -kind node -component product=0.4.2
 go run ./cmd/syntropy-update inventory list -config conf/update.json
 go run ./cmd/syntropy-update results report -config conf/update.json `
-  -target node-a -component mbot -state installed -from 1.1.0 -to 1.2.0
-'{"channel":"stable","targets":[{"id":"node-a","kind":"node","components":{"mbot":"1.1.0"}}]}' |
+  -target node-a -component product -state installed -from 0.4.2 -to 0.4.3
+'{"channel":"stable","targets":[{"id":"node-a","kind":"node","components":{"product":"0.4.2"}}]}' |
   go run ./cmd/syntropy-update plan -config conf/update.json -inventory -
 
 # 打印签名清单 / 公钥 / 列表 / 审计
 go run ./cmd/syntropy-update manifest -config conf/update.json -channel beta
-go run ./cmd/syntropy-update manifest -config conf/update.json -component mbot -channel stable
+go run ./cmd/syntropy-update manifest -config conf/update.json -component product -channel stable
 go run ./cmd/syntropy-update pubkey   -config conf/update.json
 go run ./cmd/syntropy-update list     -config conf/update.json
 go run ./cmd/syntropy-update results list -config conf/update.json -limit 20
@@ -120,6 +139,22 @@ go run ./cmd/syntropy-update serve -config conf/update.json
 mkdir -p .work/uiharness && (cd .work/uiharness && npm install jsdom)
 node tests/ui/dom-smoke.mjs --base http://127.0.0.1:8443 --token <admin-token> [--write]
 ```
+
+## 发布：本地与 CI 同一条命令
+
+灌库只有一条路：`import-bundle`（读桌面构建的 manifest）。桌面端把它包成两条 pnpm 脚本，
+CI 与本地跑的是同一条：
+
+```powershell
+Set-Location ../Syntropy/desktop_app
+pnpm release:build     # 整理本次构建产物为 dist/update-bundle/update-bundle.json
+pnpm release:publish   # 读清单，调管理面 HTTP API 灌库（--dry-run 只看计划）
+```
+
+- 凭证：`SYNTROPY_UPDATE_URL` + `SYNTROPY_UPDATE_TOKEN`（本地也可以从服务端配置里读
+  `adminTokens` 的第一项；`import-bundle -remote` 就是这么做的）。
+- 幂等：同一份输入重跑只跳过；同一版本换了字节直接报错（已发布的版本不可变）。
+- 每个平台各灌一次：先到的平台建发布与 BOM，后到的补自己那几件制品。
 
 ## 状态
 
@@ -147,7 +182,7 @@ node tests/ui/dom-smoke.mjs --base http://127.0.0.1:8443 --token <admin-token> [
   安装与回滚已落地（本机二进制）：`update.install` 默认只预演，`confirm: true` 才经本机
   Master 的 `POST /api/master/registry/{id}/binary` 停-备份-换-起，`update.rollback` 可回到
   指定备份；桌面端自身走 `shell.openPath` 交给平台安装器（NSIS/dmg/deb）后退出并由安装器
-  重新拉起；节点制品（`nbot` / `node-repl` / `node-runtime` / `codex` / `browser-runtime`）
+  重新拉起；节点制品（产品里的 `nbot` / `node-repl` 槽位，以及 `node-runtime` / `codex` 插件）
   按 `mdeploy` 的命名落到组件根 `<userData>/components/artifacts/` 并留回滚点，本机
   App Server 以 `--node-artifacts-dir` 把它排在随包目录之前，Master 因此按「组件根在前、
   随包目录兜底」取件（三平台一致，macOS 不再受 .app 签名限制）。内容制品（`templates` /

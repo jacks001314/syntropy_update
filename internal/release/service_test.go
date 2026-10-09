@@ -77,23 +77,40 @@ func (f *fixture) publishDistribution(t *testing.T, channel string, names ...str
 	}
 }
 
+// upload 上传一份制品：槽位不写，服务端按组件名兜底——非产品组件的槽位就是组件名本身。
 func (f *fixture) upload(t *testing.T, releaseID, platformOS, arch string, content []byte) model.Artifact {
 	t.Helper()
-	artifact, err := f.service.UploadArtifact(releaseID, platformOS, arch, platformOS+"-"+arch+".bin", "", bytes.NewReader(content))
+	artifact, err := f.service.UploadArtifact(releaseID, "", platformOS, arch, platformOS+"-"+arch+".bin", "", bytes.NewReader(content))
 	if err != nil {
 		t.Fatalf("upload artifact: %v", err)
 	}
 	return artifact
 }
 
+// uploadSlot 上传一份指定槽位的制品：产品发布里一次装着多件，槽位是它们之间唯一的区分。
+func (f *fixture) uploadSlot(t *testing.T, releaseID, slot, platformOS, arch string, content []byte) model.Artifact {
+	t.Helper()
+	artifact, err := f.service.UploadArtifact(releaseID, slot, platformOS, arch, platformOS+"-"+arch+".bin", "", bytes.NewReader(content))
+	if err != nil {
+		t.Fatalf("upload artifact: %v", err)
+	}
+	return artifact
+}
+
+// uploadDesktop 上传一份桌面安装器：自更新清单只认产品发布里 desktop 槽位的那一件。
+func (f *fixture) uploadDesktop(t *testing.T, releaseID, platformOS, arch string, content []byte) model.Artifact {
+	t.Helper()
+	return f.uploadSlot(t, releaseID, DesktopComponent, platformOS, arch, content)
+}
+
 func TestPublishUploadAndManifest(t *testing.T) {
 	fixture := newFixture(t)
-	saved := fixture.publish(t, model.Release{Component: DesktopComponent, Version: "0.4.0", Channel: "beta"})
-	windows := fixture.upload(t, saved.ID, "windows", "amd64", []byte("windows-installer"))
-	darwin := fixture.upload(t, saved.ID, "darwin", "arm64", []byte("darwin-installer"))
-	linux := fixture.upload(t, saved.ID, "linux", "amd64", []byte("linux-package"))
+	saved := fixture.publish(t, model.Release{Component: model.ComponentProduct, Version: "0.4.0", Channel: "beta"})
+	windows := fixture.uploadDesktop(t, saved.ID, "windows", "amd64", []byte("windows-installer"))
+	darwin := fixture.uploadDesktop(t, saved.ID, "darwin", "arm64", []byte("darwin-installer"))
+	linux := fixture.uploadDesktop(t, saved.ID, "linux", "amd64", []byte("linux-package"))
 
-	encoded, err := fixture.service.Manifest(DesktopComponent, "beta")
+	encoded, err := fixture.service.Manifest(model.ComponentProduct, "beta")
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
@@ -138,12 +155,12 @@ func TestPublishUploadAndManifest(t *testing.T) {
 // darwin|linux|win32，任何一侧少一个平台都会让那个平台的自更新清单直接报错。
 func TestManifestCoversEveryDesktopPlatform(t *testing.T) {
 	fixture := newFixture(t)
-	saved := fixture.publish(t, model.Release{Component: DesktopComponent, Version: "0.5.0", Channel: "stable"})
-	fixture.upload(t, saved.ID, "windows", "amd64", []byte("windows-installer"))
-	fixture.upload(t, saved.ID, "darwin", "arm64", []byte("darwin-installer"))
-	fixture.upload(t, saved.ID, "linux", "amd64", []byte("linux-package"))
+	saved := fixture.publish(t, model.Release{Component: model.ComponentProduct, Version: "0.5.0", Channel: "stable"})
+	fixture.uploadDesktop(t, saved.ID, "windows", "amd64", []byte("windows-installer"))
+	fixture.uploadDesktop(t, saved.ID, "darwin", "arm64", []byte("darwin-installer"))
+	fixture.uploadDesktop(t, saved.ID, "linux", "amd64", []byte("linux-package"))
 
-	encoded, err := fixture.service.Manifest(DesktopComponent, "stable")
+	encoded, err := fixture.service.Manifest(model.ComponentProduct, "stable")
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
 	}
@@ -169,8 +186,8 @@ func TestManifestCoversEveryDesktopPlatform(t *testing.T) {
 
 func TestManifestPayloadHasExactlySchemaKeys(t *testing.T) {
 	fixture := newFixture(t)
-	saved := fixture.publish(t, model.Release{Component: DesktopComponent, Version: "1.0.0", Channel: "stable"})
-	fixture.upload(t, saved.ID, "darwin", "amd64", []byte("payload"))
+	saved := fixture.publish(t, model.Release{Component: model.ComponentProduct, Version: "1.0.0", Channel: "stable"})
+	fixture.uploadDesktop(t, saved.ID, "darwin", "amd64", []byte("payload"))
 	encoded, err := fixture.service.Manifest("", "")
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
@@ -197,17 +214,17 @@ func TestManifestPayloadHasExactlySchemaKeys(t *testing.T) {
 func TestManifestIncludesKillSwitch(t *testing.T) {
 	fixture := newFixture(t)
 	fixture.publish(t, model.Release{
-		Component:               DesktopComponent,
+		Component:               model.ComponentProduct,
 		Version:                 "0.5.0",
 		Channel:                 "stable",
 		MinimumSupportedVersion: "0.3.0",
 		KillSwitch:              &model.KillSwitch{ExpiresAt: "2099-01-01T00:00:00.000Z", MinimumSafeVersion: "0.3.1"},
 	})
-	saved, err := fixture.store.FindRelease(DesktopComponent, "stable", "0.5.0")
+	saved, err := fixture.store.FindRelease(model.ComponentProduct, "stable", "0.5.0")
 	if err != nil {
 		t.Fatalf("find release: %v", err)
 	}
-	fixture.upload(t, saved.ID, "windows", "amd64", []byte("installer"))
+	fixture.uploadDesktop(t, saved.ID, "windows", "amd64", []byte("installer"))
 	encoded, err := fixture.service.Manifest("", "stable")
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
@@ -231,10 +248,10 @@ func TestPublishValidation(t *testing.T) {
 		name    string
 		release model.Release
 	}{
-		{"bad version", model.Release{Component: DesktopComponent, Version: "0.4", Channel: "beta"}},
-		{"unknown channel", model.Release{Component: DesktopComponent, Version: "0.4.0", Channel: "nightly"}},
+		{"bad version", model.Release{Component: model.ComponentProduct, Version: "0.4", Channel: "beta"}},
+		{"unknown channel", model.Release{Component: model.ComponentProduct, Version: "0.4.0", Channel: "nightly"}},
 		{"missing component", model.Release{Version: "0.4.0", Channel: "beta"}},
-		{"bad kill switch", model.Release{Component: DesktopComponent, Version: "0.4.0", Channel: "beta", KillSwitch: &model.KillSwitch{ExpiresAt: "not-a-time", MinimumSafeVersion: "0.3.1"}}},
+		{"bad kill switch", model.Release{Component: model.ComponentProduct, Version: "0.4.0", Channel: "beta", KillSwitch: &model.KillSwitch{ExpiresAt: "not-a-time", MinimumSafeVersion: "0.3.1"}}},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -243,21 +260,21 @@ func TestPublishValidation(t *testing.T) {
 			}
 		})
 	}
-	if _, err := fixture.service.PublishRelease(model.Release{Component: DesktopComponent, Version: "0.4.0", Channel: "beta"}, "test"); err != nil {
+	if _, err := fixture.service.PublishRelease(model.Release{Component: model.ComponentProduct, Version: "0.4.0", Channel: "beta"}, "test"); err != nil {
 		t.Fatalf("first publish: %v", err)
 	}
-	if _, err := fixture.service.PublishRelease(model.Release{Component: DesktopComponent, Version: "0.4.0", Channel: "beta"}, "test"); !errors.Is(err, ErrValidation) {
+	if _, err := fixture.service.PublishRelease(model.Release{Component: model.ComponentProduct, Version: "0.4.0", Channel: "beta"}, "test"); !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected duplicate to be rejected, got %v", err)
 	}
 }
 
 func TestManifestWithoutReleaseAndAfterYank(t *testing.T) {
 	fixture := newFixture(t)
-	if _, err := fixture.service.Manifest(DesktopComponent, "stable"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := fixture.service.Manifest(model.ComponentProduct, "stable"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for empty channel, got %v", err)
 	}
-	saved := fixture.publish(t, model.Release{Component: DesktopComponent, Version: "0.6.0", Channel: "stable"})
-	fixture.upload(t, saved.ID, "windows", "amd64", []byte("installer"))
+	saved := fixture.publish(t, model.Release{Component: model.ComponentProduct, Version: "0.6.0", Channel: "stable"})
+	fixture.uploadDesktop(t, saved.ID, "windows", "amd64", []byte("installer"))
 	if _, err := fixture.service.Manifest("", "stable"); err != nil {
 		t.Fatalf("manifest before yank: %v", err)
 	}
@@ -271,8 +288,8 @@ func TestManifestWithoutReleaseAndAfterYank(t *testing.T) {
 
 func TestUploadArtifactVerifiesExpectedDigest(t *testing.T) {
 	fixture := newFixture(t)
-	saved := fixture.publish(t, model.Release{Component: DesktopComponent, Version: "0.7.0", Channel: "alpha"})
-	if _, err := fixture.service.UploadArtifact(saved.ID, "windows", "amd64", "a.exe", strings.Repeat("0", 64), bytes.NewReader([]byte("x"))); !errors.Is(err, ErrValidation) {
+	saved := fixture.publish(t, model.Release{Component: model.ComponentProduct, Version: "0.7.0", Channel: "alpha"})
+	if _, err := fixture.service.UploadArtifact(saved.ID, DesktopComponent, "windows", "amd64", "a.exe", strings.Repeat("0", 64), bytes.NewReader([]byte("x"))); !errors.Is(err, ErrValidation) {
 		t.Fatalf("expected digest mismatch, got %v", err)
 	}
 }
@@ -312,7 +329,7 @@ func TestUploadContentArtifactIsPlatformIndependent(t *testing.T) {
 	assureContentComponent(t, fixture, "templates")
 	saved := fixture.publish(t, model.Release{Component: "templates", Version: "1.2.0", Channel: "stable"})
 
-	artifact, err := fixture.service.UploadArtifact(saved.ID, "", "", "", "", bytes.NewReader([]byte("tarball")))
+	artifact, err := fixture.service.UploadArtifact(saved.ID, "templates", "", "", "", "", bytes.NewReader([]byte("tarball")))
 	if err != nil {
 		t.Fatalf("upload content artifact: %v", err)
 	}
@@ -364,23 +381,27 @@ func TestUploadContentArtifactRejectsInconsistentRequest(t *testing.T) {
 	fixture := newFixture(t)
 	assureContentComponent(t, fixture, "skills")
 	content := fixture.publish(t, model.Release{Component: "skills", Version: "1.0.0", Channel: "stable"})
-	binary := fixture.publish(t, model.Release{Component: DesktopComponent, Version: "0.8.0", Channel: "stable"})
+	binary := fixture.publish(t, model.Release{Component: model.ComponentProduct, Version: "0.8.0", Channel: "stable"})
 
 	cases := []struct {
 		name     string
 		release  string
+		slot     string
 		os       string
 		arch     string
 		filename string
 	}{
-		{name: "half a platform", release: content.ID, os: "windows", filename: "skills-1.0.0.tar.gz"},
-		{name: "content file name carries another version", release: content.ID, filename: "skills-2.0.0.tar.gz"},
-		{name: "platform artifact for a content component", release: content.ID, os: "windows", arch: "amd64", filename: "skills-1.0.0.tar.gz"},
-		{name: "platform-independent artifact for a binary component", release: binary.ID, filename: "desktop-0.8.0.tar.gz"},
+		{name: "half a platform", release: content.ID, slot: "skills", os: "windows", filename: "skills-1.0.0.tar.gz"},
+		{name: "content file name carries another version", release: content.ID, slot: "skills", filename: "skills-2.0.0.tar.gz"},
+		{name: "platform artifact for a content component", release: content.ID, slot: "skills", os: "windows", arch: "amd64", filename: "skills-1.0.0.tar.gz"},
+		{name: "platform-independent artifact for a product release", release: binary.ID, slot: DesktopComponent, filename: "desktop-0.8.0.tar.gz"},
+		{name: "unknown product slot", release: binary.ID, slot: "bogus", os: "windows", arch: "amd64", filename: "bogus-windows-amd64.exe"},
+		{name: "content slot that is not a platform slot", release: content.ID, slot: "templates", filename: ""},
+		{name: "slot that is not the component name", release: content.ID, slot: "templates", os: "windows", arch: "amd64", filename: "templates-1.0.0.tar.gz"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := fixture.service.UploadArtifact(tc.release, tc.os, tc.arch, tc.filename, "", bytes.NewReader([]byte("x")))
+			_, err := fixture.service.UploadArtifact(tc.release, tc.slot, tc.os, tc.arch, tc.filename, "", bytes.NewReader([]byte("x")))
 			if !errors.Is(err, ErrValidation) {
 				t.Fatalf("error = %v, want ErrValidation", err)
 			}

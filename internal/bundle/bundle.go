@@ -26,17 +26,21 @@ import (
 	"syntropy_update/internal/release"
 )
 
-// 组件名与桌面端（apps/desktop/src/main/updates/component-layout.ts）以及 mdeploy 的
-// 制品命名保持一致：两边各起一个名字，结果就是「服务发了、客户端找不到」。
+// 受管组件与产品槽位由 internal/model 一处定义，这里只做别名，免得同一批名字在服务端
+// 出现两遍。命名与桌面端（apps/desktop/src/main/updates/component-layout.ts）以及 mdeploy
+// 的制品命名保持一致：两边各起一个名字，结果就是「服务发了、客户端找不到」。
 const (
-	ComponentMBot      = "mbot"
-	ComponentAppServer = "app-server"
-	ComponentNBot      = "nbot"
-	ComponentNodeRepl  = "node-repl"
-	ComponentCodex     = "codex"
-	ComponentTemplates = "templates"
-	ComponentSkills    = "skills"
-	ComponentDesktop   = "desktop"
+	ComponentProduct     = model.ComponentProduct
+	ComponentCodex       = model.ComponentCodex
+	ComponentNodeRuntime = model.ComponentNodeRuntime
+	ComponentTemplates   = model.ComponentTemplates
+	ComponentSkills      = model.ComponentSkills
+
+	ComponentDesktop   = model.SlotDesktop
+	ComponentMBot      = model.SlotMBot
+	ComponentNBot      = model.SlotNBot
+	ComponentNodeRepl  = model.SlotNodeRepl
+	ComponentAppServer = model.SlotAppServer
 )
 
 // FileRef 是清单里的一份产物：相对资源根目录的路径 + 大小 + 摘要。
@@ -73,16 +77,24 @@ type Codex struct {
 	Artifacts []CodexArtifact `json:"artifacts"`
 }
 
+// NodeRuntime 记录随包 Node 解释器的版本与各平台制品；它有独立版本线，不随产品版本走。
+type NodeRuntime struct {
+	Version   string    `json:"version"`
+	Source    string    `json:"source"`
+	Artifacts []FileRef `json:"artifacts"`
+}
+
 // Manifest 是 release-manifest.json 里本包用到的部分（其余字段一律忽略）。
 type Manifest struct {
-	SchemaVersion     int        `json:"schemaVersion"`
-	ProductVersion    string     `json:"productVersion"`
-	Target            Target     `json:"target"`
-	Components        Components `json:"components"`
-	Codex             Codex      `json:"codex"`
-	NodeArtifacts     []FileRef  `json:"nodeArtifacts"`
-	NodeReplArtifacts []FileRef  `json:"nodeReplArtifacts"`
-	MasterArtifacts   []FileRef  `json:"masterArtifacts"`
+	SchemaVersion     int         `json:"schemaVersion"`
+	ProductVersion    string      `json:"productVersion"`
+	Target            Target      `json:"target"`
+	Components        Components  `json:"components"`
+	Codex             Codex       `json:"codex"`
+	NodeRuntime       NodeRuntime `json:"nodeRuntime"`
+	NodeArtifacts     []FileRef   `json:"nodeArtifacts"`
+	NodeReplArtifacts []FileRef   `json:"nodeReplArtifacts"`
+	MasterArtifacts   []FileRef   `json:"masterArtifacts"`
 }
 
 // ParseManifest 解析 release-manifest.json。schemaVersion 认不出来时直接拒绝：
@@ -102,6 +114,8 @@ func ParseManifest(encoded []byte) (Manifest, error) {
 type Artifact struct {
 	// Path 是制品在本机的路径（资源根 + 清单里的相对路径）。
 	Path string
+	// Slot 是制品在组件里占的槽位：产品组件靠它区分成员，其余组件等于组件名本身。
+	Slot string
 	OS   string
 	Arch string
 	// Filename 是清单登记、客户端按它落盘的下载文件名。
@@ -153,21 +167,26 @@ type ContentArtifact struct {
 
 // componentDef 是组件的固定属性：灌库与客户端必须对同名的东西有同一种理解。
 type componentDef struct {
-	name       string
-	kind       string
+	// name 是受管组件名（product / codex / node-runtime / templates / skills）。
+	name string
+	kind string
+	// versioning 只有两种：产品版本（product）与独立版本（其余）。
 	versioning string
+	// slots 是这份发布里允许出现的槽位；非产品组件只有一个槽位，就是组件名本身。
+	slots []string
 }
 
 // componentDefs 的先后顺序就是 BOM 里的组件顺序，固定下来便于比对与复现。
+//
+// 只有 5 行：产品（desktop / mbot / nbot / node-repl / app-server，一次发版全部一起出）
+// 加 4 个插件。产品成员不再各自成行——每次版本变更前后端基本都要一起改，拆开发布只换来
+// 「漏发一件」这类事故。
 var componentDefs = []componentDef{
-	{ComponentMBot, model.KindBinary, model.VersioningProduct},
-	{ComponentAppServer, model.KindBinary, model.VersioningProduct},
-	{ComponentNBot, model.KindBinary, model.VersioningProduct},
-	{ComponentNodeRepl, model.KindBinary, model.VersioningIndependent},
-	{ComponentCodex, model.KindArchive, model.VersioningIndependent},
-	{ComponentTemplates, model.KindContent, model.VersioningIndependent},
-	{ComponentSkills, model.KindContent, model.VersioningIndependent},
-	{ComponentDesktop, model.KindInstaller, model.VersioningProduct},
+	{ComponentProduct, model.KindProduct, model.VersioningProduct, model.ProductSlots},
+	{ComponentCodex, model.KindArchive, model.VersioningIndependent, []string{ComponentCodex}},
+	{ComponentNodeRuntime, model.KindBinary, model.VersioningIndependent, []string{ComponentNodeRuntime}},
+	{ComponentTemplates, model.KindContent, model.VersioningIndependent, []string{ComponentTemplates}},
+	{ComponentSkills, model.KindContent, model.VersioningIndependent, []string{ComponentSkills}},
 }
 
 // NormalizeProductVersion 把构建清单里的产品版本归一到 MAJOR.MINOR.PATCH。
@@ -226,10 +245,17 @@ func PlanAssets(manifest Manifest, options PlanOptions) (Plan, error) {
 	// put 登记一份制品。校验口径由组件类型决定：平台组件必须给出已知的 (os,arch)，
 	// 内容组件必须与平台无关；文件名一律要等于客户端认的那一个——两边各起一个名字，
 	// 结果就是「服务发了、客户端找不到」。
-	put := func(component string, artifact Artifact, origin string) error {
+	put := func(component, slot string, artifact Artifact, origin string) error {
 		definition, known := definitions[component]
 		if !known {
 			return fmt.Errorf("bundle: %s: not a managed component (%s)", component, origin)
+		}
+		artifact.Slot = slot
+		if !slotAllowed(definition, slot) {
+			return fmt.Errorf(
+				"bundle: %s: slot %q is not one of %s (%s)",
+				component, slot, strings.Join(definition.slots, ", "), origin,
+			)
 		}
 		if definition.kind == model.KindContent {
 			if artifact.OS != "" || artifact.Arch != "" {
@@ -249,16 +275,16 @@ func PlanAssets(manifest Manifest, options PlanOptions) (Plan, error) {
 				)
 			}
 		}
-		if expected := expectedArtifactName(component, artifact.OS, artifact.Arch, versions[component]); expected != "" && artifact.Filename != expected {
+		if expected := expectedArtifactName(slot, artifact.OS, artifact.Arch, versions[component]); expected != "" && artifact.Filename != expected {
 			return fmt.Errorf(
 				"bundle: %s %s artifact is named %q, the client expects %q",
-				component, artifactKey(artifact.OS, artifact.Arch), artifact.Filename, expected,
+				component, artifactKey(slot, artifact.OS, artifact.Arch), artifact.Filename, expected,
 			)
 		}
 		if slots[component] == nil {
 			slots[component] = make(map[string]Artifact)
 		}
-		key := artifactKey(artifact.OS, artifact.Arch)
+		key := artifactKey(slot, artifact.OS, artifact.Arch)
 		if existing, taken := slots[component][key]; taken {
 			reason := "清单里给了两份内容相同的制品"
 			if !strings.EqualFold(existing.SHA256, artifact.SHA256) {
@@ -286,7 +312,7 @@ func PlanAssets(manifest Manifest, options PlanOptions) (Plan, error) {
 		}
 		artifact.Path = join(root, file.Path)
 		artifact.SHA256 = file.SHA256
-		if err := put(ComponentMBot, artifact, file.Path); err != nil {
+		if err := put(ComponentProduct, ComponentMBot, artifact, file.Path); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -295,17 +321,17 @@ func PlanAssets(manifest Manifest, options PlanOptions) (Plan, error) {
 		artifact.OS, artifact.Arch = manifest.Target.OS, manifest.Target.Arch
 		// 随包的宿主二进制叫 syntropy-master，而客户端按 mbot-<os>-<arch> 取件、并按
 		// 这个名字落盘；清单里的 filename 是给客户端用的落盘名，所以按约定名发布。
-		if canonical := expectedArtifactName(ComponentMBot, artifact.OS, artifact.Arch, versions[ComponentMBot]); canonical != "" {
+		if canonical := expectedArtifactName(ComponentMBot, artifact.OS, artifact.Arch, versions[ComponentProduct]); canonical != "" {
 			artifact.Filename = canonical
 		}
-		if err := put(ComponentMBot, artifact, master.Path); err != nil {
+		if err := put(ComponentProduct, ComponentMBot, artifact, master.Path); err != nil {
 			return Plan{}, err
 		}
 	}
 	if webServer := manifest.Components.WebServer; webServer.Path != "" {
 		artifact := fromRef(webServer)
 		artifact.OS, artifact.Arch = manifest.Target.OS, manifest.Target.Arch
-		if err := put(ComponentAppServer, artifact, webServer.Path); err != nil {
+		if err := put(ComponentProduct, ComponentAppServer, artifact, webServer.Path); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -316,7 +342,7 @@ func PlanAssets(manifest Manifest, options PlanOptions) (Plan, error) {
 		}
 		artifact.Path = join(root, file.Path)
 		artifact.SHA256 = file.SHA256
-		if err := put(ComponentNBot, artifact, file.Path); err != nil {
+		if err := put(ComponentProduct, ComponentNBot, artifact, file.Path); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -327,7 +353,7 @@ func PlanAssets(manifest Manifest, options PlanOptions) (Plan, error) {
 		}
 		artifact.Path = join(root, file.Path)
 		artifact.SHA256 = file.SHA256
-		if err := put(ComponentNodeRepl, artifact, file.Path); err != nil {
+		if err := put(ComponentProduct, ComponentNodeRepl, artifact, file.Path); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -339,12 +365,24 @@ func PlanAssets(manifest Manifest, options PlanOptions) (Plan, error) {
 			Path:     join(root, file.Path),
 			SHA256:   file.SHA256,
 		}
-		if err := put(ComponentCodex, artifact, file.Path); err != nil {
+		if err := put(ComponentCodex, ComponentCodex, artifact, file.Path); err != nil {
+			return Plan{}, err
+		}
+	}
+	// 随包 Node 解释器是独立版本线的插件，制品名 node-runtime-<os>-<arch>[.exe]。
+	for _, file := range manifest.NodeRuntime.Artifacts {
+		artifact, err := artifactFromName(ComponentNodeRuntime, file.Path)
+		if err != nil {
+			return Plan{}, err
+		}
+		artifact.Path = join(root, file.Path)
+		artifact.SHA256 = file.SHA256
+		if err := put(ComponentNodeRuntime, ComponentNodeRuntime, artifact, file.Path); err != nil {
 			return Plan{}, err
 		}
 	}
 	for _, artifact := range options.Desktop {
-		if err := put(ComponentDesktop, artifact, artifact.Path); err != nil {
+		if err := put(ComponentProduct, ComponentDesktop, artifact, artifact.Path); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -358,8 +396,9 @@ func PlanAssets(manifest Manifest, options PlanOptions) (Plan, error) {
 		if !filepath.IsAbs(file) {
 			file = join(root, file)
 		}
+		componentName := strings.TrimSpace(artifact.Component)
 		entry := Artifact{Filename: filepath.Base(artifact.Path), Path: file, SHA256: artifact.SHA256}
-		if err := put(strings.TrimSpace(artifact.Component), entry, artifact.Path); err != nil {
+		if err := put(componentName, componentName, entry, artifact.Path); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -370,6 +409,9 @@ func PlanAssets(manifest Manifest, options PlanOptions) (Plan, error) {
 		if len(found) == 0 {
 			notes = append(notes, fmt.Sprintf("清单里没有 %s 的制品，这一轮不发这个组件", definition.name))
 			continue
+		}
+		for _, slot := range missingSlots(definition, found) {
+			notes = append(notes, fmt.Sprintf("%s 缺少 %s 槽位的制品，这一版不含该成员", definition.name, slot))
 		}
 		component := ComponentPlan{
 			Name:       definition.name,
@@ -417,6 +459,15 @@ func componentVersion(
 		}
 		*notes = append(*notes, "清单没记录 codex 版本，按产品版本发布")
 	}
+	if definition.name == ComponentNodeRuntime {
+		if runtimeVersion := strings.TrimSpace(manifest.NodeRuntime.Version); runtimeVersion != "" {
+			if !release.ValidVersion(runtimeVersion) {
+				return "", fmt.Errorf("bundle: release manifest records node-runtime version %q, want MAJOR.MINOR.PATCH (override with -component-version node-runtime=<version>)", runtimeVersion)
+			}
+			return runtimeVersion, nil
+		}
+		*notes = append(*notes, "清单没记录 node-runtime 版本，按产品版本发布")
+	}
 	return productVersion, nil
 }
 
@@ -450,39 +501,68 @@ func artifactFromName(component, filePath string) (Artifact, error) {
 	return Artifact{Arch: arch, Filename: name, OS: os}, nil
 }
 
-// expectedArtifactName 复刻客户端（component-layout.ts）的命名约定；未知组件返回空串，
-// 由调用方决定要不要当真。内容组件的文件名里带着版本，所以版本必须一起传进来。
-func expectedArtifactName(component, os, arch, version string) string {
-	if contentComponent(component) {
-		return fmt.Sprintf("%s-%s.tar.gz", component, version)
+// expectedArtifactName 复刻客户端（component-layout.ts）的命名约定；未知槽位返回空串，
+// 由调用方决定要不要当真。内容制品的文件名里带着版本，所以版本必须一起传进来。
+//
+// 参数是槽位而不是组件名：产品组件里 mbot / nbot / node-repl / app-server 各占一槽，
+// 文件名按槽位命名，客户端也按槽位找件。
+func expectedArtifactName(slot, os, arch, version string) string {
+	if contentComponent(slot) {
+		return fmt.Sprintf("%s-%s.tar.gz", slot, version)
 	}
 	suffix := ""
 	if os == "windows" {
 		suffix = ".exe"
 	}
-	switch component {
+	switch slot {
 	case ComponentAppServer:
 		return "syntropy-app-server" + suffix
 	case ComponentCodex:
 		return fmt.Sprintf("codex-%s-%s.tgz", os, arch)
-	case ComponentMBot, ComponentNBot, ComponentNodeRepl:
-		return fmt.Sprintf("%s-%s-%s%s", component, os, arch, suffix)
+	case ComponentMBot, ComponentNBot, ComponentNodeRepl, ComponentNodeRuntime:
+		return fmt.Sprintf("%s-%s-%s%s", slot, os, arch, suffix)
 	default:
 		return ""
 	}
 }
 
-// contentComponent 判断组件是不是内容制品：与 (os,arch) 无关的目录归档。
-func contentComponent(component string) bool {
-	return component == ComponentTemplates || component == ComponentSkills
+// contentComponent 判断槽位是不是内容制品：与 (os,arch) 无关的目录归档。
+func contentComponent(slot string) bool {
+	return slot == ComponentTemplates || slot == ComponentSkills
 }
 
-// artifactKey 是同一组件下制品的去重键；内容制品只有一个，用 content 当键。
-func artifactKey(platformOS, arch string) string {
-	if platformOS == "" && arch == "" {
-		return "content"
+// slotAllowed 判断槽位是不是这份组件定义允许的槽位。
+func slotAllowed(definition componentDef, slot string) bool {
+	for _, allowed := range definition.slots {
+		if slot == allowed {
+			return true
+		}
 	}
-	return platformOS + "/" + arch
+	return false
+}
+
+// missingSlots 列出这份组件定义里「一件制品都没有」的槽位。产品平台矩阵不全是允许的
+// （macOS 公证之类的意外不该卡住整版），但必须显式记下来，别让人以为发了全部成员。
+func missingSlots(definition componentDef, found map[string]Artifact) []string {
+	present := make(map[string]bool, len(found))
+	for _, artifact := range found {
+		present[artifact.Slot] = true
+	}
+	missing := make([]string, 0, len(definition.slots))
+	for _, slot := range definition.slots {
+		if !present[slot] {
+			missing = append(missing, slot)
+		}
+	}
+	return missing
+}
+
+// artifactKey 是同一组件下制品的去重键；内容制品只有一个，用 <槽位>/content 当键。
+func artifactKey(slot, platformOS, arch string) string {
+	if platformOS == "" && arch == "" {
+		return slot + "/content"
+	}
+	return slot + "/" + platformOS + "/" + arch
 }
 
 var knownOS = map[string]bool{"windows": true, "darwin": true, "linux": true}

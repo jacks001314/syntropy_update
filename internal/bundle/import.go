@@ -19,7 +19,7 @@ type Service interface {
 	FindRelease(component, channel, version string) (model.Release, error)
 	CreateRelease(model.Release, string) (model.Release, error)
 	Artifacts(releaseID string) ([]model.Artifact, error)
-	UploadArtifact(releaseID, platformOS, arch, filename, expectedSHA256 string, reader io.Reader) (model.Artifact, error)
+	UploadArtifact(releaseID, slot, platformOS, arch, filename, expectedSHA256 string, reader io.Reader) (model.Artifact, error)
 	PointChannel(component, channel, releaseID, actor string) error
 	GetDistribution(channel, productVersion string) (model.Distribution, error)
 	PublishDistribution(model.Distribution, string) (model.Distribution, error)
@@ -167,12 +167,12 @@ func importComponent(
 			return ReleaseReport{}, fmt.Errorf("list artifacts of %s: %w", report.ReleaseID, listErr)
 		}
 		for _, artifact := range listed {
-			registered[artifactKey(artifact.OS, artifact.Arch)] = artifact
+			registered[artifactKey(artifact.Slot, artifact.OS, artifact.Arch)] = artifact
 		}
 	}
 
 	for _, artifact := range component.Artifacts {
-		key := artifactKey(artifact.OS, artifact.Arch)
+		key := artifactKey(artifact.Slot, artifact.OS, artifact.Arch)
 		digest := artifact.SHA256
 		if digest == "" {
 			// 清单没给摘要（桌面端安装器就是这种）：现算一份，既用于比对已登记的制品，
@@ -197,7 +197,7 @@ func importComponent(
 		if openErr != nil {
 			return ReleaseReport{}, fmt.Errorf("open artifact %s: %w", artifact.Path, openErr)
 		}
-		_, uploadErr := service.UploadArtifact(report.ReleaseID, artifact.OS, artifact.Arch, artifact.Filename, digest, file)
+		_, uploadErr := service.UploadArtifact(report.ReleaseID, artifact.Slot, artifact.OS, artifact.Arch, artifact.Filename, digest, file)
 		closeErr := file.Close()
 		if uploadErr != nil {
 			return ReleaseReport{}, fmt.Errorf("upload %s %s: %w", component.Name, key, uploadErr)

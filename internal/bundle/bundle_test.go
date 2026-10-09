@@ -32,6 +32,17 @@ const realManifestJSON = `{
       { "os": "darwin", "arch": "arm64", "path": "node/artifacts/codex-darwin-arm64.tgz", "sha256": "fc789bcd655d903f92e1a23c8dc5315ba38f43b3586eafb7bd3b195970b57466", "size": 134311083 }
     ]
   },
+  "nodeRuntime": {
+    "version": "24.14.0",
+    "source": "https://nodejs.org/dist/v24.14.0",
+    "artifacts": [
+      { "path": "node/artifacts/node-runtime-darwin-amd64", "size": 101711872, "sha256": "0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f6" },
+      { "path": "node/artifacts/node-runtime-darwin-arm64", "size": 98765432, "sha256": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809" },
+      { "path": "node/artifacts/node-runtime-linux-amd64", "size": 115343360, "sha256": "2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a" },
+      { "path": "node/artifacts/node-runtime-linux-arm64", "size": 110100480, "sha256": "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b" },
+      { "path": "node/artifacts/node-runtime-windows-amd64.exe", "size": 118489088, "sha256": "4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c" }
+    ]
+  },
   "nodeArtifacts": [
     { "path": "node/artifacts/nbot-linux-amd64", "size": 20828322, "sha256": "3ac0057454afa4624a1240f5627090571ffaee72a7089212528598534e8cef10" },
     { "path": "node/artifacts/nbot-linux-arm64", "size": 19660962, "sha256": "cbba5f5a4182c41ad4b98666eb008ff43a8fe375b3e26bc57ba1986dc24a6b23" },
@@ -87,14 +98,16 @@ func componentByName(t *testing.T, plan Plan, name string) ComponentPlan {
 	return ComponentPlan{}
 }
 
-func artifactByPlatform(t *testing.T, component ComponentPlan, platform string) Artifact {
+// artifactBySlotPlatform 取某个槽位在某平台上的制品。产品一次发布装着五件，同一平台上
+// 会有多份制品，只按 (os,arch) 找会撞到别的成员，所以槽位必须一起给。
+func artifactBySlotPlatform(t *testing.T, component ComponentPlan, slot, platform string) Artifact {
 	t.Helper()
 	for _, artifact := range component.Artifacts {
-		if artifact.OS+"/"+artifact.Arch == platform {
+		if artifact.Slot == slot && artifact.OS+"/"+artifact.Arch == platform {
 			return artifact
 		}
 	}
-	t.Fatalf("%s has no %s artifact (%+v)", component.Name, platform, component.Artifacts)
+	t.Fatalf("%s has no %s artifact on %s (%+v)", component.Name, slot, platform, component.Artifacts)
 	return Artifact{}
 }
 
@@ -148,7 +161,8 @@ func TestPlanAssetsFromRealManifest(t *testing.T) {
 	if plan.ProductVersion != "0.3.1" {
 		t.Fatalf("product version = %q, want 0.3.1", plan.ProductVersion)
 	}
-	wantOrder := []string{"mbot", "app-server", "nbot", "node-repl", "codex", "desktop"}
+	// 组件只有 5 个、顺序固定；这一版没有 templates / skills 的制品，所以它们不进计划。
+	wantOrder := []string{ComponentProduct, ComponentCodex, ComponentNodeRuntime}
 	if got := componentNames(plan); strings.Join(got, ",") != strings.Join(wantOrder, ",") {
 		t.Fatalf("component order = %v, want %v", got, wantOrder)
 	}
@@ -159,12 +173,9 @@ func TestPlanAssetsFromRealManifest(t *testing.T) {
 		versioning string
 		version    string
 	}{
-		{"mbot", model.KindBinary, model.VersioningProduct, "0.3.1"},
-		{"app-server", model.KindBinary, model.VersioningProduct, "0.3.1"},
-		{"nbot", model.KindBinary, model.VersioningProduct, "0.3.1"},
-		{"node-repl", model.KindBinary, model.VersioningIndependent, "0.3.1"},
-		{"codex", model.KindArchive, model.VersioningIndependent, "0.160.0"},
-		{"desktop", model.KindInstaller, model.VersioningProduct, "0.3.1"},
+		{ComponentProduct, model.KindProduct, model.VersioningProduct, "0.3.1"},
+		{ComponentCodex, model.KindArchive, model.VersioningIndependent, "0.160.0"},
+		{ComponentNodeRuntime, model.KindBinary, model.VersioningIndependent, "24.14.0"},
 	} {
 		component := componentByName(t, plan, want.name)
 		if component.Kind != want.kind || component.Versioning != want.versioning || component.Version != want.version {
@@ -174,33 +185,59 @@ func TestPlanAssetsFromRealManifest(t *testing.T) {
 		}
 	}
 
-	wantArtifacts := map[string][]string{
-		"mbot": {
+	// 产品只有一份发布，五件成员靠槽位区分；每个槽位都要落到客户端认的那个文件名上。
+	product := componentByName(t, plan, ComponentProduct)
+	wantSlots := map[string][]string{
+		ComponentMBot: {
 			"darwin/amd64=mbot-darwin-amd64",
 			"darwin/arm64=mbot-darwin-arm64",
 			"linux/amd64=mbot-linux-amd64",
 			"linux/arm64=mbot-linux-arm64",
 			"windows/amd64=mbot-windows-amd64.exe",
 		},
-		"nbot": {
+		ComponentNBot: {
 			"darwin/amd64=nbot-darwin-amd64",
 			"darwin/arm64=nbot-darwin-arm64",
 			"linux/amd64=nbot-linux-amd64",
 			"linux/arm64=nbot-linux-arm64",
 			"windows/amd64=nbot-windows-amd64.exe",
 		},
-		"node-repl": {
+		ComponentNodeRepl: {
 			"darwin/amd64=node-repl-darwin-amd64",
 			"darwin/arm64=node-repl-darwin-arm64",
 			"linux/amd64=node-repl-linux-amd64",
 			"linux/arm64=node-repl-linux-arm64",
 			"windows/amd64=node-repl-windows-amd64.exe",
 		},
-		"codex": {
+		ComponentAppServer: {"windows/amd64=syntropy-app-server.exe"},
+		ComponentDesktop:   {"windows/amd64=SyntropySetup-0.3.1.exe"},
+	}
+	gotSlots := map[string][]string{}
+	for _, artifact := range product.Artifacts {
+		gotSlots[artifact.Slot] = append(gotSlots[artifact.Slot], artifact.OS+"/"+artifact.Arch+"="+artifact.Filename)
+	}
+	if len(product.Artifacts) != 17 {
+		t.Errorf("product has %d artifacts, want 5+5+5+1+1=17", len(product.Artifacts))
+	}
+	for slot, want := range wantSlots {
+		if strings.Join(gotSlots[slot], ",") != strings.Join(want, ",") {
+			t.Errorf("product slot %s = %v, want %v", slot, gotSlots[slot], want)
+		}
+	}
+
+	wantArtifacts := map[string][]string{
+		ComponentCodex: {
 			"darwin/amd64=codex-darwin-amd64.tgz",
 			"darwin/arm64=codex-darwin-arm64.tgz",
 			"linux/amd64=codex-linux-amd64.tgz",
 			"windows/amd64=codex-windows-amd64.tgz",
+		},
+		ComponentNodeRuntime: {
+			"darwin/amd64=node-runtime-darwin-amd64",
+			"darwin/arm64=node-runtime-darwin-arm64",
+			"linux/amd64=node-runtime-linux-amd64",
+			"linux/arm64=node-runtime-linux-arm64",
+			"windows/amd64=node-runtime-windows-amd64.exe",
 		},
 	}
 	for name, want := range wantArtifacts {
@@ -215,7 +252,7 @@ func TestPlanAssetsFromRealManifest(t *testing.T) {
 	}
 
 	// mbot 的两处来源里，node/artifacts 那份才是客户端会去取的，宿主二进制只补空缺。
-	mbotWindows := artifactByPlatform(t, componentByName(t, plan, "mbot"), "windows/amd64")
+	mbotWindows := artifactBySlotPlatform(t, product, ComponentMBot, "windows/amd64")
 	if want := filepath.Join(`C:\bundle`, "node", "artifacts", "mbot-windows-amd64.exe"); mbotWindows.Path != want {
 		t.Errorf("mbot windows path = %q, want %q", mbotWindows.Path, want)
 	}
@@ -223,22 +260,19 @@ func TestPlanAssetsFromRealManifest(t *testing.T) {
 		t.Error("mbot windows artifact lost its manifest digest")
 	}
 
-	appServer := componentByName(t, plan, "app-server")
-	if len(appServer.Artifacts) != 1 {
-		t.Fatalf("app-server has %d artifacts, want 1", len(appServer.Artifacts))
-	}
-	if got := appServer.Artifacts[0]; got.OS != "windows" || got.Arch != "amd64" || got.Filename != "syntropy-app-server.exe" {
-		t.Errorf("app-server artifact = %+v", got)
+	appServer := artifactBySlotPlatform(t, product, ComponentAppServer, "windows/amd64")
+	if appServer.Filename != "syntropy-app-server.exe" {
+		t.Errorf("app-server artifact = %+v", appServer)
 	}
 
-	desktop := componentByName(t, plan, "desktop")
-	if len(desktop.Artifacts) != 1 || desktop.Artifacts[0].Filename != installer.Filename || desktop.Artifacts[0].Path != installer.Path {
-		t.Errorf("desktop plan = %+v, want the passed-in installer", desktop.Artifacts)
+	desktopArtifact := artifactBySlotPlatform(t, product, ComponentDesktop, "windows/amd64")
+	if desktopArtifact.Filename != installer.Filename || desktopArtifact.Path != installer.Path {
+		t.Errorf("desktop artifact = %+v, want the passed-in installer", desktopArtifact)
 	}
 
 	duplicate := false
 	for _, note := range plan.Notes {
-		if strings.Contains(note, "mbot windows/amd64 重复") {
+		if strings.Contains(note, "product mbot/windows/amd64 重复") {
 			duplicate = true
 		}
 	}
@@ -252,23 +286,25 @@ func TestPlanAssetsPathAndVersionOverrides(t *testing.T) {
 		AssetDir:          "/assets",
 		ManifestDir:       "/ignored",
 		ProductVersion:    "9.9.9",
-		ComponentVersions: map[string]string{"node-repl": "1.4.0"},
+		ComponentVersions: map[string]string{ComponentCodex: "0.9.9"},
 	})
 
 	if plan.ProductVersion != "9.9.9" {
 		t.Fatalf("product version = %q, want 9.9.9", plan.ProductVersion)
 	}
-	if got := componentByName(t, plan, "node-repl").Version; got != "1.4.0" {
-		t.Errorf("node-repl version = %q, want 1.4.0", got)
+	if got := componentByName(t, plan, ComponentCodex).Version; got != "0.9.9" {
+		t.Errorf("codex version = %q, want 0.9.9", got)
 	}
-	if got := componentByName(t, plan, "mbot").Version; got != "9.9.9" {
-		t.Errorf("mbot version = %q, want 9.9.9", got)
+	// 产品版本被覆盖后，产品组件（mbot / nbot / node-repl / app-server / desktop 都在里面）
+	// 一起跟到 9.9.9；独立版本线的 node-runtime 仍按清单里的版本走。
+	if got := componentByName(t, plan, ComponentProduct).Version; got != "9.9.9" {
+		t.Errorf("product version = %q, want 9.9.9", got)
 	}
-	if got := componentByName(t, plan, "codex").Version; got != "0.160.0" {
-		t.Errorf("codex version = %q, want 0.160.0", got)
+	if got := componentByName(t, plan, ComponentNodeRuntime).Version; got != "24.14.0" {
+		t.Errorf("node-runtime version = %q, want 24.14.0", got)
 	}
 	want := filepath.Join("/assets", "node", "artifacts", "mbot-linux-amd64")
-	if got := artifactByPlatform(t, componentByName(t, plan, "mbot"), "linux/amd64").Path; got != want {
+	if got := artifactBySlotPlatform(t, componentByName(t, plan, ComponentProduct), ComponentMBot, "linux/amd64").Path; got != want {
 		t.Errorf("mbot linux path = %q, want %q", got, want)
 	}
 }
@@ -307,8 +343,8 @@ func TestPlanAssetsRejectsBadInput(t *testing.T) {
 		},
 		{
 			name:    "component version override is not semver",
-			options: PlanOptions{ComponentVersions: map[string]string{"mbot": "1.2.3.4"}},
-			want:    "mbot version",
+			options: PlanOptions{ComponentVersions: map[string]string{ComponentCodex: "1.2.3.4"}},
+			want:    "codex version",
 		},
 	}
 	for _, tc := range cases {
@@ -345,21 +381,18 @@ func TestPlanAssetsRequiresAssetRoot(t *testing.T) {
 	}
 }
 
+// TestPlanAssetsNotesMissingDesktopInstallers：没给桌面安装器时，产品这一版就缺 desktop
+// 槽位——不发这一件可以，但必须写在 notes 里，别让人以为五件都发全了。
 func TestPlanAssetsNotesMissingDesktopInstallers(t *testing.T) {
 	plan := planFromRealManifest(t, PlanOptions{ManifestDir: "/bundle"})
-	for _, component := range plan.Components {
-		if component.Name == ComponentDesktop {
+	product := componentByName(t, plan, ComponentProduct)
+	for _, artifact := range product.Artifacts {
+		if artifact.Slot == ComponentDesktop {
 			t.Fatal("desktop should not be planned without a desktop installer")
 		}
 	}
-	noted := false
-	for _, note := range plan.Notes {
-		if strings.Contains(note, "清单里没有 desktop 的制品") {
-			noted = true
-		}
-	}
-	if !noted {
-		t.Errorf("notes should mention the missing desktop installer, got %v", plan.Notes)
+	if !hasNote(plan.Notes, "product 缺少 desktop 槽位的制品") {
+		t.Errorf("notes should mention the missing desktop slot, got %v", plan.Notes)
 	}
 }
 

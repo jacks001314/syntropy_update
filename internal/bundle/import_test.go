@@ -85,7 +85,7 @@ func (f *fakeService) Artifacts(releaseID string) ([]model.Artifact, error) {
 	return append([]model.Artifact{}, f.artifacts[releaseID]...), nil
 }
 
-func (f *fakeService) UploadArtifact(releaseID, platformOS, arch, filename, expectedSHA256 string, reader io.Reader) (model.Artifact, error) {
+func (f *fakeService) UploadArtifact(releaseID, slot, platformOS, arch, filename, expectedSHA256 string, reader io.Reader) (model.Artifact, error) {
 	data, err := io.ReadAll(reader)
 	if err != nil {
 		return model.Artifact{}, err
@@ -97,6 +97,7 @@ func (f *fakeService) UploadArtifact(releaseID, platformOS, arch, filename, expe
 	artifact := model.Artifact{
 		ID:         fmt.Sprintf("artifact-%d-%d", f.nextID, len(f.uploads)),
 		ReleaseID:  releaseID,
+		Slot:       slot,
 		OS:         platformOS,
 		Arch:       arch,
 		Filename:   filename,
@@ -104,10 +105,10 @@ func (f *fakeService) UploadArtifact(releaseID, platformOS, arch, filename, expe
 		SHA256:     digest,
 		BlobSHA256: digest,
 	}
-	f.uploads = append(f.uploads, releaseID+" "+platformOS+"/"+arch+" "+filename)
+	f.uploads = append(f.uploads, releaseID+" "+slot+" "+platformOS+"/"+arch+" "+filename)
 	replaced := false
 	for index, current := range f.artifacts[releaseID] {
-		if current.OS == platformOS && current.Arch == arch {
+		if current.Slot == slot && current.OS == platformOS && current.Arch == arch {
 			f.artifacts[releaseID][index] = artifact
 			replaced = true
 		}
@@ -144,28 +145,31 @@ func (f *fakeService) artifactCount(releaseID string) int {
 	return len(f.artifacts[releaseID])
 }
 
+// samplePlan 是一份最小的产品发布计划：产品（product）一次装 mbot 与 desktop 两件，
+// 再加一个独立版本线的 codex。产品只有一份发布，成员靠槽位区分。
 func samplePlan() Plan {
 	return Plan{
 		ProductVersion: "0.3.1",
 		Components: []ComponentPlan{
 			{
-				Name:       ComponentMBot,
-				Kind:       model.KindBinary,
+				Name:       ComponentProduct,
+				Kind:       model.KindProduct,
 				Versioning: model.VersioningProduct,
 				Version:    "0.3.1",
 				Artifacts: []Artifact{
-					{Path: "/bundle/node/artifacts/mbot-linux-amd64", OS: "linux", Arch: "amd64", Filename: "mbot-linux-amd64", SHA256: digestOf([]byte("mbot-linux"))},
-					{Path: "/bundle/node/artifacts/mbot-windows-amd64.exe", OS: "windows", Arch: "amd64", Filename: "mbot-windows-amd64.exe", SHA256: digestOf([]byte("mbot-windows"))},
+					{Path: "/bundle/node/artifacts/mbot-linux-amd64", Slot: ComponentMBot, OS: "linux", Arch: "amd64", Filename: "mbot-linux-amd64", SHA256: digestOf([]byte("mbot-linux"))},
+					{Path: "/bundle/node/artifacts/mbot-windows-amd64.exe", Slot: ComponentMBot, OS: "windows", Arch: "amd64", Filename: "mbot-windows-amd64.exe", SHA256: digestOf([]byte("mbot-windows"))},
+					// 安装器在清单里没有摘要：灌库要现算一份。
+					{Path: "/dist/SyntropySetup-0.3.1.exe", Slot: ComponentDesktop, OS: "windows", Arch: "amd64", Filename: "SyntropySetup-0.3.1.exe"},
 				},
 			},
 			{
-				Name:       ComponentDesktop,
-				Kind:       model.KindInstaller,
-				Versioning: model.VersioningProduct,
-				Version:    "0.3.1",
-				// 安装器在清单里没有摘要：灌库要现算一份。
+				Name:       ComponentCodex,
+				Kind:       model.KindArchive,
+				Versioning: model.VersioningIndependent,
+				Version:    "0.160.0",
 				Artifacts: []Artifact{
-					{Path: "/dist/SyntropySetup-0.3.1.exe", OS: "windows", Arch: "amd64", Filename: "SyntropySetup-0.3.1.exe"},
+					{Path: "/bundle/node/artifacts/codex-linux-amd64.tgz", Slot: ComponentCodex, OS: "linux", Arch: "amd64", Filename: "codex-linux-amd64.tgz", SHA256: digestOf([]byte("codex-linux"))},
 				},
 			},
 		},
@@ -176,6 +180,7 @@ func sampleArtifacts() memoryOpener {
 	return memoryOpener{
 		"/bundle/node/artifacts/mbot-linux-amd64":       []byte("mbot-linux"),
 		"/bundle/node/artifacts/mbot-windows-amd64.exe": []byte("mbot-windows"),
+		"/bundle/node/artifacts/codex-linux-amd64.tgz":  []byte("codex-linux"),
 		"/dist/SyntropySetup-0.3.1.exe":                 []byte("installer-bytes"),
 	}
 }
@@ -209,23 +214,24 @@ func TestImportPublishesReleasesAndBOM(t *testing.T) {
 		t.Fatalf("reported %d releases, want 2", len(report.Releases))
 	}
 
-	mbot := reportFor(t, report, ComponentMBot)
-	if !mbot.Created || !mbot.Published || len(mbot.Uploaded) != 2 {
-		t.Errorf("mbot report = %+v", mbot)
+	product := reportFor(t, report, ComponentProduct)
+	if !product.Created || !product.Published || len(product.Uploaded) != 3 {
+		t.Errorf("product report = %+v", product)
 	}
-	if got := service.pointerFor(ComponentMBot, "stable"); got != mbot.ReleaseID {
-		t.Errorf("mbot channel pointer = %q, want %q", got, mbot.ReleaseID)
+	if got := service.pointerFor(ComponentProduct, "stable"); got != product.ReleaseID {
+		t.Errorf("product channel pointer = %q, want %q", got, product.ReleaseID)
 	}
-	if got := service.artifactCount(mbot.ReleaseID); got != 2 {
-		t.Errorf("mbot stored %d artifacts, want 2", got)
+	if got := service.artifactCount(product.ReleaseID); got != 3 {
+		t.Errorf("product stored %d artifacts, want 3", got)
+	}
+	// 安装器那份在清单里没有摘要：上传时的摘要必须是现算出来的那一份。
+	if !strings.Contains(product.Uploaded[2], shortSHA(digestOf([]byte("installer-bytes")))) {
+		t.Errorf("desktop upload = %v, want the digest computed from the file", product.Uploaded)
 	}
 
-	desktop := reportFor(t, report, ComponentDesktop)
-	if !desktop.Created || !desktop.Published || len(desktop.Uploaded) != 1 {
-		t.Errorf("desktop report = %+v", desktop)
-	}
-	if !strings.Contains(desktop.Uploaded[0], shortSHA(digestOf([]byte("installer-bytes")))) {
-		t.Errorf("desktop upload = %v, want the digest computed from the file", desktop.Uploaded)
+	codex := reportFor(t, report, ComponentCodex)
+	if !codex.Created || !codex.Published || len(codex.Uploaded) != 1 {
+		t.Errorf("codex report = %+v", codex)
 	}
 
 	distribution, err := service.GetDistribution("stable", "0.3.1")
@@ -233,8 +239,8 @@ func TestImportPublishesReleasesAndBOM(t *testing.T) {
 		t.Fatalf("GetDistribution: %v", err)
 	}
 	if len(distribution.Components) != 2 ||
-		distribution.Components[0].Name != ComponentMBot ||
-		distribution.Components[1].Name != ComponentDesktop {
+		distribution.Components[0].Name != ComponentProduct ||
+		distribution.Components[1].Name != ComponentCodex {
 		t.Errorf("distribution = %+v", distribution)
 	}
 	if !strings.Contains(report.Distribution, "已发布") {
@@ -326,8 +332,8 @@ func TestImportNoPublishLeavesPointersAndBOMAlone(t *testing.T) {
 			t.Errorf("%s was published despite -no-publish", produced.Component)
 		}
 	}
-	if got := service.artifactCount(reportFor(t, report, ComponentMBot).ReleaseID); got != 2 {
-		t.Errorf("mbot stored %d artifacts, want 2 even without publishing", got)
+	if got := service.artifactCount(reportFor(t, report, ComponentProduct).ReleaseID); got != 3 {
+		t.Errorf("product stored %d artifacts, want 3 even without publishing", got)
 	}
 }
 
@@ -337,7 +343,7 @@ func TestImportRefusesConflictingBOM(t *testing.T) {
 		Channel:        "stable",
 		ProductVersion: "0.3.1",
 		Components: []model.DistributionComponent{
-			{Name: ComponentMBot, Version: "0.3.1", ReleaseID: "release-elsewhere"},
+			{Name: ComponentProduct, Version: "0.3.1", ReleaseID: "release-elsewhere"},
 		},
 	}
 	_, err := Import(service, samplePlan(), ImportOptions{Channel: "stable", Open: sampleArtifacts().open, Publish: true})
@@ -364,24 +370,24 @@ func TestImportRequiresChannel(t *testing.T) {
 
 func TestSameComponentsIgnoresOrder(t *testing.T) {
 	left := []model.DistributionComponent{
-		{Name: ComponentMBot, Version: "0.3.1", ReleaseID: "release-1"},
-		{Name: ComponentDesktop, Version: "0.3.1", ReleaseID: "release-2"},
+		{Name: ComponentProduct, Version: "0.3.1", ReleaseID: "release-1"},
+		{Name: ComponentCodex, Version: "0.160.0", ReleaseID: "release-2"},
 	}
 	right := []model.DistributionComponent{
-		{Name: ComponentDesktop, Version: "0.3.1", ReleaseID: "release-2"},
-		{Name: ComponentMBot, Version: "0.3.1", ReleaseID: "release-1"},
+		{Name: ComponentCodex, Version: "0.160.0", ReleaseID: "release-2"},
+		{Name: ComponentProduct, Version: "0.3.1", ReleaseID: "release-1"},
 	}
 	if !sameComponents(left, right) {
 		t.Fatal("sameComponents should ignore the order")
 	}
 	if sameComponents(left, []model.DistributionComponent{
-		{Name: ComponentMBot, Version: "0.3.2", ReleaseID: "release-1"},
-		{Name: ComponentDesktop, Version: "0.3.1", ReleaseID: "release-2"},
+		{Name: ComponentProduct, Version: "0.3.2", ReleaseID: "release-1"},
+		{Name: ComponentCodex, Version: "0.160.0", ReleaseID: "release-2"},
 	}) {
 		t.Fatal("sameComponents should notice a different version")
 	}
 	if sameComponents(left, []model.DistributionComponent{
-		{Name: ComponentMBot, Version: "0.3.1", ReleaseID: "release-1"},
+		{Name: ComponentProduct, Version: "0.3.1", ReleaseID: "release-1"},
 	}) {
 		t.Fatal("sameComponents should notice a missing component")
 	}

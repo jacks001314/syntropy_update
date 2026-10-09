@@ -23,7 +23,42 @@ const (
 	KindArchive   = "archive"
 	KindInstaller = "installer"
 	KindContent   = "content"
+	// KindProduct 是产品组件：一次发布里装着全部产品成员的制品，靠槽位区分。
+	KindProduct = "product"
 )
+
+// 受管组件名。产品（product）是我们自己写的代码编出来的东西，整体只有一个版本；
+// 其余四个是可以单独升级的插件。这份清单是服务端唯一的事实源：BOM、管理面与
+// 「组件清单一致」门禁都从这里取，客户端那一侧在
+// desktop_app/apps/desktop/src/main/updates/component-layout.ts。
+const (
+	ComponentProduct     = "product"
+	ComponentCodex       = "codex"
+	ComponentNodeRuntime = "node-runtime"
+	ComponentTemplates   = "templates"
+	ComponentSkills      = "skills"
+)
+
+// ComponentNames 是受管组件的完整清单与顺序，固定下来便于比对与复现。
+var ComponentNames = []string{
+	ComponentProduct,
+	ComponentCodex,
+	ComponentNodeRuntime,
+	ComponentTemplates,
+	ComponentSkills,
+}
+
+// 产品组件的槽位：一次产品发布里各成员各占一个槽位，制品靠它区分是哪一件。
+const (
+	SlotDesktop   = "desktop"
+	SlotMBot      = "mbot"
+	SlotNBot      = "nbot"
+	SlotNodeRepl  = "node-repl"
+	SlotAppServer = "app-server"
+)
+
+// ProductSlots 是产品组件的槽位清单与顺序，固定下来便于比对与复现。
+var ProductSlots = []string{SlotDesktop, SlotMBot, SlotNBot, SlotNodeRepl, SlotAppServer}
 
 // Versioning modes.
 const (
@@ -58,8 +93,11 @@ type Component struct {
 
 // Artifact 是某次发布中面向 (os, arch) 的制品。
 type Artifact struct {
-	ID          string `json:"id"`
-	ReleaseID   string `json:"releaseId"`
+	ID        string `json:"id"`
+	ReleaseID string `json:"releaseId"`
+	// Slot 是制品在产品组件里占的槽位（desktop/mbot/nbot/node-repl/app-server）。
+	// 其余组件的制品槽位等于组件名本身，内容制品也用组件名当槽位。
+	Slot        string `json:"slot"`
 	OS          string `json:"os"`
 	Arch        string `json:"arch"`
 	Filename    string `json:"filename"`

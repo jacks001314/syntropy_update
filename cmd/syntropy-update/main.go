@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"os/signal"
@@ -23,6 +24,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 	lumberjack "gopkg.in/natefinch/lumberjack.v2"
 
+	"syntropy_update/internal/adminclient"
 	"syntropy_update/internal/api"
 	"syntropy_update/internal/auth"
 	"syntropy_update/internal/blob"
@@ -92,7 +94,7 @@ commands:
   keygen    生成 Ed25519 签名密钥
   pubkey    打印签名公钥 PEM
   publish   创建发布并上传制品
-  import-bundle  按桌面构建清单一次性灌入发布、制品与 BOM（CI 用）
+  import-bundle  按桌面构建清单一次性灌入发布、制品与 BOM（本地或 -remote，CI 用）
   distribution  发布/查看分发定义（BOM）
   manifest  打印签名后的更新清单
   plan      提交库存 JSON，计算并保存升级计划
@@ -173,6 +175,64 @@ func loadDeps(configPath string, requireKey bool) (*deps, error) {
 }
 
 func (d *deps) Close() { _ = d.store.Close() }
+
+// loadOptionalConfig 读配置文件；文件不存在时返回默认值。
+//
+// 远端发布时本机可能压根没装升级服务，而「默认渠道」与「admin token」这两样都可能来自
+// 命令行参数或 CI 密钥，不该因为本机少一个配置文件就跑不起来。文件存在但内容坏掉仍然报错：
+// 悄悄退回默认值，只会让一次发版发到错误的渠道上。
+func loadOptionalConfig(path string) (config.Config, error) {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return config.Default(), nil
+	}
+	if _, err := os.Stat(trimmed); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return config.Default(), nil
+		}
+		return config.Config{}, fmt.Errorf("stat config %s: %w", trimmed, err)
+	}
+	return config.Load(trimmed)
+}
+
+// publishTargetOptions 是选择灌库后端的输入。
+type publishTargetOptions struct {
+	Actor      string
+	ConfigPath string
+	Remote     string
+	Token      string
+	Config     config.Config
+}
+
+// publishTarget 按「有没有 -remote」选出灌库后端：本地直接写数据目录，远端走管理面
+// HTTP API。两条路背后是同一个 bundle.Service 接口，所以调用方（bundle.Import）看到的
+// 语义完全一样——这正是「本地发布」与「CI 发布」能共用一条命令的原因。
+func publishTarget(options publishTargetOptions) (bundle.Service, func(), error) {
+	address := strings.TrimSpace(options.Remote)
+	if address == "" {
+		deps, err := loadDeps(options.ConfigPath, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		return deps.service, deps.Close, nil
+	}
+	adminToken := strings.TrimSpace(options.Token)
+	if adminToken == "" {
+		if len(options.Config.AdminTokens) == 0 {
+			return nil, nil, fmt.Errorf(
+				"-remote %s needs an admin token: pass -token, or put adminTokens in %s",
+				address, options.ConfigPath,
+			)
+		}
+		adminToken = options.Config.AdminTokens[0]
+	}
+	client, err := adminclient.New(address, adminclient.Options{Actor: options.Actor, Token: adminToken})
+	if err != nil {
+		return nil, nil, err
+	}
+	fmt.Printf("import-bundle -> %s (admin API)\n", client.BaseURL())
+	return client, func() {}, nil
+}
 
 func runServe(args []string) error {
 	flags := flag.NewFlagSet("serve", flag.ExitOnError)
@@ -395,9 +455,10 @@ func (a *artifactFlag) Set(value string) error {
 func runPublish(args []string) error {
 	flags := flag.NewFlagSet("publish", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "config file path")
-	component := flags.String("component", release.DesktopComponent, "component name")
-	kind := flags.String("kind", model.KindBinary, "component kind (binary|archive|installer|content)")
+	component := flags.String("component", model.ComponentProduct, "component name")
+	kind := flags.String("kind", model.KindBinary, "component kind (binary|archive|installer|content|product)")
 	versioning := flags.String("versioning", model.VersioningProduct, "versioning mode (product|independent)")
+	slot := flags.String("slot", "", "artifact slot (product: desktop|mbot|nbot|node-repl|app-server; defaults to the component name)")
 	version := flags.String("version", "", "version MAJOR.MINOR.PATCH")
 	channel := flags.String("channel", "", "channel (alpha|beta|stable)")
 	notes := flags.String("notes", "", "release notes")
@@ -448,30 +509,51 @@ func runPublish(args []string) error {
 	if *killSwitchExpires != "" {
 		releaseValue.KillSwitch = &model.KillSwitch{ExpiresAt: *killSwitchExpires, MinimumSafeVersion: *killSwitchMin}
 	}
+	// 同一 (组件, 渠道, 版本) 可能已经被发过：产品一次装五件，而一次命令行只带得动一个槽位，
+	// 所以「再发一次」的语义是补制品，不是报错。版本不可变由制品摘要把关（bundle 灌库那一侧）。
 	var saved model.Release
-	if *noPublish {
-		saved, err = deps.service.CreateRelease(releaseValue, "cli")
-	} else {
-		saved, err = deps.service.PublishRelease(releaseValue, "cli")
-	}
-	if err != nil {
+	existing, err := deps.service.FindRelease(*component, *channel, *version)
+	switch {
+	case err == nil:
+		saved = existing
+		fmt.Printf("release %s %s/%s 已存在，复用（本次只补制品）\n", saved.ID, saved.Component, saved.Version)
+		if !*noPublish {
+			if err := deps.service.PointChannel(saved.Component, saved.Channel, saved.ID, "cli"); err != nil {
+				return err
+			}
+		}
+	case errors.Is(err, release.ErrNotFound):
+		if *noPublish {
+			saved, err = deps.service.CreateRelease(releaseValue, "cli")
+		} else {
+			saved, err = deps.service.PublishRelease(releaseValue, "cli")
+		}
+		if err != nil {
+			return err
+		}
+	default:
 		return err
 	}
 	// 内容制品没有 (os,arch)，与平台制品分成两种来源，但走同一段上传代码。
-	type upload struct{ label, os, arch, path string }
+	// 槽位没给就取组件名：非产品组件的槽位本来就是组件名本身。
+	slotValue := strings.TrimSpace(*slot)
+	if slotValue == "" {
+		slotValue = strings.TrimSpace(*component)
+	}
+	type upload struct{ label, slot, os, arch, path string }
 	uploads := make([]upload, 0, len(artifacts.specs)+1)
 	for _, spec := range artifacts.specs {
-		uploads = append(uploads, upload{label: spec.os + "/" + spec.arch, os: spec.os, arch: spec.arch, path: spec.path})
+		uploads = append(uploads, upload{label: spec.os + "/" + spec.arch, slot: slotValue, os: spec.os, arch: spec.arch, path: spec.path})
 	}
 	if path := strings.TrimSpace(*content); path != "" {
-		uploads = append(uploads, upload{label: "content", path: path})
+		uploads = append(uploads, upload{label: "content", slot: slotValue, path: path})
 	}
 	for _, spec := range uploads {
 		file, err := os.Open(spec.path)
 		if err != nil {
 			return err
 		}
-		artifact, uploadErr := deps.service.UploadArtifact(saved.ID, spec.os, spec.arch, filepath.Base(spec.path), "", file)
+		artifact, uploadErr := deps.service.UploadArtifact(saved.ID, spec.slot, spec.os, spec.arch, filepath.Base(spec.path), "", file)
 		closeErr := file.Close()
 		if uploadErr != nil {
 			return uploadErr
@@ -490,6 +572,9 @@ func runPublish(args []string) error {
 //
 // CI 只需要三件事：清单路径、产物根目录（默认取清单所在目录）、本次要发的桌面端安装器。
 // 幂等：同一份输入重跑只跳过；同一版本换了字节则报错（已发布的版本不可变）。
+//
+// 两种后端：默认写本机数据目录；给 -remote 时改走升级服务的管理面 HTTP API，
+// 于是「本地发布」与「CI 发布」是同一条命令、同一段灌库代码，只有凭证来源不同。
 func runImportBundle(args []string) error {
 	flags := flag.NewFlagSet("import-bundle", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "config file path")
@@ -502,6 +587,8 @@ func runImportBundle(args []string) error {
 	actor := flags.String("actor", "ci", "audit actor")
 	noPublish := flags.Bool("no-publish", false, "create releases and upload artifacts without moving the channel pointer or publishing the BOM")
 	dryRun := flags.Bool("dry-run", false, "print the plan and exit without touching the service")
+	remote := flags.String("remote", "", "publish to a running service admin API instead of the local data dir (e.g. https://app.syntropy-lab.com)")
+	token := flags.String("token", "", "admin token for -remote (defaults to the first adminTokens entry of the config file)")
 	var desktop artifactFlag
 	flags.Var(&desktop, "desktop", "desktop installer as os/arch=path (repeatable)")
 	var componentVersions componentFlag
@@ -554,15 +641,25 @@ func runImportBundle(args []string) error {
 		printBundlePlan(plan)
 		return nil
 	}
-	deps, err := loadDeps(*configPath, false)
+	cfg, err := loadOptionalConfig(*configPath)
 	if err != nil {
 		return err
 	}
-	defer deps.Close()
 	if *channel == "" {
-		*channel = deps.cfg.DefaultChannel
+		*channel = cfg.DefaultChannel
 	}
-	report, err := bundle.Import(deps.service, plan, bundle.ImportOptions{
+	service, closeService, err := publishTarget(publishTargetOptions{
+		Actor:      *actor,
+		ConfigPath: *configPath,
+		Remote:     *remote,
+		Token:      *token,
+		Config:     cfg,
+	})
+	if err != nil {
+		return err
+	}
+	defer closeService()
+	report, err := bundle.Import(service, plan, bundle.ImportOptions{
 		Channel:  *channel,
 		Actor:    *actor,
 		Notes:    *notes,
@@ -624,7 +721,7 @@ func printBundleReport(report bundle.Report) {
 func runManifest(args []string) error {
 	flags := flag.NewFlagSet("manifest", flag.ExitOnError)
 	configPath := flags.String("config", defaultConfigPath, "config file path")
-	component := flags.String("component", release.DesktopComponent, "component name")
+	component := flags.String("component", model.ComponentProduct, "component name（product 出桌面自更新清单）")
 	channel := flags.String("channel", "", "channel (defaults to config defaultChannel)")
 	if err := flags.Parse(args); err != nil {
 		return err
@@ -637,12 +734,17 @@ func runManifest(args []string) error {
 	if *channel == "" {
 		*channel = deps.cfg.DefaultChannel
 	}
-	// 桌面自更新清单与集群组件清单是两种载荷；按组件名分派。
+	// 桌面自更新清单与集群组件清单是两种载荷；按组件名分派。桌面端是产品里 desktop
+	// 槽位的那一件，所以 product（以及 legacy 的 desktop）出的是自更新清单。
+	name := strings.TrimSpace(*component)
+	if name == release.DesktopComponent {
+		name = model.ComponentProduct
+	}
 	var encoded []byte
-	if *component == release.DesktopComponent {
-		encoded, err = deps.service.Manifest(*component, *channel)
+	if name == model.ComponentProduct {
+		encoded, err = deps.service.Manifest(name, *channel)
 	} else {
-		encoded, err = deps.service.ComponentManifest(*component, *channel)
+		encoded, err = deps.service.ComponentManifest(name, *channel)
 	}
 	if err != nil {
 		return err
