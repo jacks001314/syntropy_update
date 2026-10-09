@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Syntropy 升级服务 · 运维控制台</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="mark" aria-hidden="true">S</span>
+          <span class="brand-text">
+            <strong>Syntropy 升级服务</strong>
+            <span class="muted">运维控制台</span>
+          </span>
+        </div>
+        <nav id="tabs" class="nav" aria-label="管理功能"></nav>
+        <div class="sidebar-foot">
+          <div id="conn" class="conn" role="status">正在检测服务…</div>
+          <code id="base-url" class="mono"></code>
+        </div>
+      </aside>
+      <div class="content">
+        <header class="topbar">
+          <div class="crumb">
+            <h1 id="page-title">概览</h1>
+            <p id="page-hint" class="muted"></p>
+          </div>
+          <div class="topbar-actions">
+            <button id="refresh" type="button" class="ghost">刷新</button>
+            <div class="token">
+              <label for="token" class="muted">管理令牌</label>
+              <input
+                id="token"
+                type="password"
+                placeholder="Bearer Token"
+                autocomplete="off"
+                spellcheck="false"
+              />
+              <button id="token-save" type="button">使用</button>
+              <button id="token-clear" type="button" class="ghost">清除</button>
+            </div>
+          </div>
+        </header>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+        <main id="view" class="view"></main>
+        <footer class="footer muted">
+          令牌只保存在本标签页的 sessionStorage 里；页面本身不需要令牌，所有 /v1/admin/* 请求都会带上它。
+          升级动作永远由桌面应用执行，本页只维护事实与策略。
+        </footer>
+      </div>
+    </div>
+    <noscript>
+      <p class="noscript">
+        管理页需要 JavaScript：请用启用了脚本的浏览器打开，或直接调用 <code>/v1/admin/*</code> JSON 接口。
+      </p>
+    </noscript>
+    <script src="app.js"></script>
+  </body>
+</html>

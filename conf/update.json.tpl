@@ -1,0 +1,20 @@
+{
+  "addr": "0.0.0.0:8443",
+  "publicBaseURL": "https://app.syntropy-lab.com",
+  "dataDir": "data",
+  "logDir": "logs",
+  "logLevel": "info",
+  "signingKeyFile": "keys/update-signing.pem",
+  "adminTokens": [],
+  "clientTokens": [],
+  "requireDeviceTokens": false,
+  "requireReadTokens": false,
+  "channels": ["alpha", "beta", "stable"],
+  "defaultChannel": "stable",
+  "tlsAddr": ":443",
+  "tlsDomains": [],
+  "tlsEmail": "",
+  "tlsCacheDir": "",
+  "blobDir": "data/blobs",
+  "dbFile": "data/update.db"
+}

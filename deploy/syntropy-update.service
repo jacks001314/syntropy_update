@@ -1,0 +1,32 @@
+[Unit]
+Description=Syntropy 升级服务（syntropy_update）
+Documentation=https://app.syntropy-lab.com/admin/
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=syntropy-update
+Group=syntropy-update
+WorkingDirectory=/var/lib/syntropy-update
+ExecStart=/opt/syntropy-update/syntropy-update serve -config /etc/syntropy-update/update.json
+Restart=on-failure
+RestartSec=3
+
+# 监听 443 需要绑定特权端口的能力；进程本身仍以非 root 运行，只拿到这一个能力。
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+# 升级服务只需要读配置与自己的数据目录，其余保持只读/隔离。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+ReadWritePaths=/var/lib/syntropy-update /var/log/syntropy-update
+ReadOnlyPaths=/etc/syntropy-update /opt/syntropy-update
+
+[Install]
+WantedBy=multi-user.target

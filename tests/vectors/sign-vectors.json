@@ -1,0 +1,81 @@
+{
+  "note": "由 tests/vectors/generate.mjs 生成；canonicalize 与 update-service.ts 一致。",
+  "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEANHw9j2ckunQRBnCZ0jgWgTs8LJjujG8vKbgVJHhhG0s=\n-----END PUBLIC KEY-----\n",
+  "vectors": [
+    {
+      "name": "desktop-manifest",
+      "payload": {
+        "artifacts": [
+          {
+            "arch": "x64",
+            "platform": "win32",
+            "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "size": 1024,
+            "url": "https://app.syntropy-lab.com/blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          },
+          {
+            "arch": "arm64",
+            "platform": "darwin",
+            "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "size": 2048,
+            "url": "https://app.syntropy-lab.com/blobs/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          }
+        ],
+        "channel": "beta",
+        "expiresAt": "2099-07-30T00:00:00.000Z",
+        "killSwitch": {
+          "expiresAt": "2099-07-30T00:00:00.000Z",
+          "minimumSafeVersion": "0.3.1"
+        },
+        "minimumSupportedVersion": "0.2.0",
+        "publishedAt": "2026-10-05T00:00:00.000Z",
+        "releaseNotesUrl": "https://app.syntropy-lab.com/releases/0.4.0",
+        "version": "0.4.0"
+      },
+      "canonical": "{\"artifacts\":[{\"arch\":\"x64\",\"platform\":\"win32\",\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"size\":1024,\"url\":\"https://app.syntropy-lab.com/blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},{\"arch\":\"arm64\",\"platform\":\"darwin\",\"sha256\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"size\":2048,\"url\":\"https://app.syntropy-lab.com/blobs/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\"}],\"channel\":\"beta\",\"expiresAt\":\"2099-07-30T00:00:00.000Z\",\"killSwitch\":{\"expiresAt\":\"2099-07-30T00:00:00.000Z\",\"minimumSafeVersion\":\"0.3.1\"},\"minimumSupportedVersion\":\"0.2.0\",\"publishedAt\":\"2026-10-05T00:00:00.000Z\",\"releaseNotesUrl\":\"https://app.syntropy-lab.com/releases/0.4.0\",\"version\":\"0.4.0\"}",
+      "signature": "DHzbghiC8LqQES8DFM44pwsvCHJczQPIqfxknTf8s0URy0Xdd0XhXOqe97RyBA3Q8SSMg6wAhHWfmvXA23CBAg=="
+    },
+    {
+      "name": "bom",
+      "payload": {
+        "channel": "stable",
+        "components": [
+          {
+            "artifacts": [
+              {
+                "arch": "amd64",
+                "filename": "mbot-linux-amd64",
+                "os": "linux",
+                "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                "size": 41943040
+              }
+            ],
+            "kind": "binary",
+            "name": "mbot",
+            "version": "0.3.0"
+          },
+          {
+            "artifacts": [
+              {
+                "arch": "amd64",
+                "filename": "codex-linux-amd64.tgz",
+                "os": "linux",
+                "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "size": 123456789
+              }
+            ],
+            "kind": "archive",
+            "name": "codex",
+            "version": "0.160.0"
+          }
+        ],
+        "expiresAt": "2099-07-30T00:00:00.000Z",
+        "product": "syntropy",
+        "productVersion": "0.3.0",
+        "publishedAt": "2026-10-05T00:00:00.000Z"
+      },
+      "canonical": "{\"channel\":\"stable\",\"components\":[{\"artifacts\":[{\"arch\":\"amd64\",\"filename\":\"mbot-linux-amd64\",\"os\":\"linux\",\"sha256\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"size\":41943040}],\"kind\":\"binary\",\"name\":\"mbot\",\"version\":\"0.3.0\"},{\"artifacts\":[{\"arch\":\"amd64\",\"filename\":\"codex-linux-amd64.tgz\",\"os\":\"linux\",\"sha256\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"size\":123456789}],\"kind\":\"archive\",\"name\":\"codex\",\"version\":\"0.160.0\"}],\"expiresAt\":\"2099-07-30T00:00:00.000Z\",\"product\":\"syntropy\",\"productVersion\":\"0.3.0\",\"publishedAt\":\"2026-10-05T00:00:00.000Z\"}",
+      "signature": "XAprdTfHcacX1N/3rmxP2a2cx5/lKHxFpU3VL93yCvHiEk/DMWxvp5jceRwOMTLLr+j5+ayavgXgqb7u3d6GCA=="
+    }
+  ]
+}
