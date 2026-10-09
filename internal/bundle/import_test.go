@@ -337,18 +337,21 @@ func TestImportNoPublishLeavesPointersAndBOMAlone(t *testing.T) {
 	}
 }
 
-func TestImportRefusesConflictingBOM(t *testing.T) {
-	service := newFakeService()
-	service.distributions[distributionKey("stable", "0.3.1")] = model.Distribution{
-		Channel:        "stable",
-		ProductVersion: "0.3.1",
-		Components: []model.DistributionComponent{
-			{Name: ComponentProduct, Version: "0.3.1", ReleaseID: "release-elsewhere"},
-		},
-	}
+// conflictingService 模拟服务端对 BOM 锚点的校验：产品换了就必须升产品版本，推进会被拒。
+// 规则本身只在 release.PublishDistribution 一处实现，这里只验证 Import 会把它透出来。
+type conflictingService struct {
+	*fakeService
+}
+
+func (c *conflictingService) PublishDistribution(value model.Distribution, actor string) (model.Distribution, error) {
+	return model.Distribution{}, fmt.Errorf("distribution %s/%s already exists for a different product release; bump the product version instead", value.Channel, value.ProductVersion)
+}
+
+func TestImportSurfacesDistributionConflict(t *testing.T) {
+	service := &conflictingService{fakeService: newFakeService()}
 	_, err := Import(service, samplePlan(), ImportOptions{Channel: "stable", Open: sampleArtifacts().open, Publish: true})
-	if err == nil || !strings.Contains(err.Error(), "不可变") {
-		t.Fatalf("Import error = %v, want an immutability failure", err)
+	if err == nil || !strings.Contains(err.Error(), "bump the product version") {
+		t.Fatalf("Import error = %v, want the service's BOM rejection surfaced", err)
 	}
 }
 

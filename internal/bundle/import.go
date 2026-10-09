@@ -99,26 +99,26 @@ func Import(service Service, plan Plan, options ImportOptions) (Report, error) {
 		return report, nil
 	}
 	existing, err := service.GetDistribution(channel, plan.ProductVersion)
-	switch {
-	case err == nil:
-		if sameComponents(existing.Components, distribution.Components) {
-			report.Distribution = fmt.Sprintf("已存在且一致（%s/%s），跳过", channel, plan.ProductVersion)
-			return report, nil
-		}
-		return Report{}, fmt.Errorf(
-			"bundle: BOM %s/%s 已存在且组件与本次不一致：已发布的 BOM 不可变，请升产品版本号",
-			channel, plan.ProductVersion,
-		)
-	case errors.Is(err, release.ErrNotFound):
-		saved, publishErr := service.PublishDistribution(distribution, actor)
-		if publishErr != nil {
-			return Report{}, fmt.Errorf("publish distribution: %w", publishErr)
-		}
-		report.Distribution = fmt.Sprintf("已发布 %s/%s（%d 个组件）", saved.Channel, saved.ProductVersion, len(saved.Components))
-		return report, nil
-	default:
+	if err != nil && !errors.Is(err, release.ErrNotFound) {
 		return Report{}, fmt.Errorf("read distribution %s/%s: %w", channel, plan.ProductVersion, err)
 	}
+	if err == nil && sameComponents(existing.Components, distribution.Components) {
+		report.Distribution = fmt.Sprintf("已存在且一致（%s/%s），跳过", channel, plan.ProductVersion)
+		return report, nil
+	}
+	// 已存在但组件不同：插件版本可以推进 BOM，产品换了会被 PublishDistribution 挡回去。
+	// 「产品版本是 BOM 的锚点」这条规则只在服务端一处实现，这里不复制一份。
+	advanced := err == nil
+	saved, publishErr := service.PublishDistribution(distribution, actor)
+	if publishErr != nil {
+		return Report{}, fmt.Errorf("publish distribution: %w", publishErr)
+	}
+	if advanced {
+		report.Distribution = fmt.Sprintf("已推进 %s/%s 的 BOM（%d 个组件）", saved.Channel, saved.ProductVersion, len(saved.Components))
+		return report, nil
+	}
+	report.Distribution = fmt.Sprintf("已发布 %s/%s（%d 个组件）", saved.Channel, saved.ProductVersion, len(saved.Components))
+	return report, nil
 }
 
 func importComponent(

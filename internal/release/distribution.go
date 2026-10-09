@@ -64,19 +64,32 @@ func (s *Service) PublishDistribution(distribution model.Distribution, actor str
 		}
 		distribution.Components[index] = model.DistributionComponent{Name: name, Version: component.Version, ReleaseID: releaseValue.ID}
 	}
-	if existing, err := s.store.GetDistribution(distribution.Channel, distribution.ProductVersion); err == nil && existing.ProductVersion != "" {
-		return model.Distribution{}, fmt.Errorf("%w: distribution %s/%s already exists", ErrValidation, distribution.Channel, distribution.ProductVersion)
-	} else if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return model.Distribution{}, err
-	}
+	// 产品版本是 BOM 的锚点：产品自己换了就必须升产品版本，插件换了则可以随时推进。
+	existing, existingErr := s.store.GetDistribution(distribution.Channel, distribution.ProductVersion)
+	action := "distribution.publish"
 	now := model.NowMS()
-	distribution.CreatedAtMS = now
+	switch {
+	case existingErr == nil && existing.ProductVersion != "":
+		if !sameProductRelease(existing.Components, distribution.Components) {
+			return model.Distribution{}, fmt.Errorf(
+				"%w: distribution %s/%s already exists for a different product release; bump the product version instead",
+				ErrValidation, distribution.Channel, distribution.ProductVersion,
+			)
+		}
+		action = "distribution.update"
+		// 产品没动、只是插件推进：创建时间不变，发布时间刷新。
+		distribution.CreatedAtMS = existing.CreatedAtMS
+	case existingErr != nil && !errors.Is(existingErr, store.ErrNotFound):
+		return model.Distribution{}, existingErr
+	default:
+		distribution.CreatedAtMS = now
+	}
 	distribution.PublishedAtMS = now
 	if err := s.store.PutDistribution(distribution); err != nil {
 		return model.Distribution{}, err
 	}
 	if err := s.store.AppendAudit(model.AuditEntry{
-		Action:  "distribution.publish",
+		Action:  action,
 		Actor:   actor,
 		Subject: distribution.Channel + "/" + distribution.ProductVersion,
 	}); err != nil {
@@ -160,4 +173,31 @@ func (s *Service) SignedDistribution(channel, productVersion string) ([]byte, er
 		PublishedAt:    formatTimestamp(time.UnixMilli(distribution.PublishedAtMS).UTC()),
 	}
 	return sign.SignEnvelope(s.privateKey, payload)
+}
+
+// sameProductRelease 判断两份 BOM 里的产品是不是同一份发布。
+//
+// 产品版本（`productVersion`）是 BOM 的锚点，产品自己只有一个版本号：产品换了，锚点就换了，
+// 只能发新的产品版本。插件（codex / node-runtime / templates / skills）各有版本号，
+// 可以随时推进 BOM 而不动产品版本——「插件可单独升级」在服务端的落点就是这里。
+func sameProductRelease(existing, next []model.DistributionComponent) bool {
+	current, ok := findDistributionComponent(existing, model.ComponentProduct)
+	if !ok {
+		return false
+	}
+	candidate, ok := findDistributionComponent(next, model.ComponentProduct)
+	if !ok {
+		return false
+	}
+	return current.ReleaseID == candidate.ReleaseID && current.Version == candidate.Version
+}
+
+// findDistributionComponent 按组件名取一条 BOM 条目。
+func findDistributionComponent(components []model.DistributionComponent, name string) (model.DistributionComponent, bool) {
+	for _, component := range components {
+		if component.Name == name {
+			return component, true
+		}
+	}
+	return model.DistributionComponent{}, false
 }

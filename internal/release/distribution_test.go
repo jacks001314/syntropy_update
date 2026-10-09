@@ -118,3 +118,81 @@ func TestLatestDistributionMissing(t *testing.T) {
 		t.Fatal("expected error for empty channel")
 	}
 }
+
+// TestPublishDistributionAdvancesPluginsOnly 钉住 BOM 的锚点规则：插件的版本可以随时推进，
+// 产品自己换了就必须发新的产品版本。
+func TestPublishDistributionAdvancesPluginsOnly(t *testing.T) {
+	fixture := newFixture(t)
+	product := fixture.publish(t, model.Release{Component: model.ComponentProduct, Version: "1.2.0", Channel: "stable"})
+	fixture.publish(t, model.Release{Component: model.ComponentCodex, Version: "0.160.0", Channel: "stable"})
+
+	first, err := fixture.service.PublishDistribution(model.Distribution{
+		Channel:        "stable",
+		ProductVersion: "1.2.0",
+		Components: []model.DistributionComponent{
+			{Name: model.ComponentProduct, Version: "1.2.0"},
+			{Name: model.ComponentCodex, Version: "0.160.0"},
+		},
+	}, "test")
+	if err != nil {
+		t.Fatalf("publish distribution: %v", err)
+	}
+	if first.Components[0].ReleaseID != product.ID {
+		t.Fatalf("product entry = %+v", first.Components[0])
+	}
+
+	// 插件推进：codex 换了版本，templates 第一次进 BOM；产品一个字都没改。
+	codex := fixture.publish(t, model.Release{Component: model.ComponentCodex, Version: "0.161.0", Channel: "stable"})
+	templates := fixture.publish(t, model.Release{Component: model.ComponentTemplates, Version: "1.0.0", Channel: "stable"})
+	advanced, err := fixture.service.PublishDistribution(model.Distribution{
+		Channel:        "stable",
+		ProductVersion: "1.2.0",
+		Components: []model.DistributionComponent{
+			{Name: model.ComponentProduct, Version: "1.2.0"},
+			{Name: model.ComponentCodex, Version: "0.161.0"},
+			{Name: model.ComponentTemplates, Version: "1.0.0"},
+		},
+	}, "ci")
+	if err != nil {
+		t.Fatalf("advance distribution: %v", err)
+	}
+	if advanced.CreatedAtMS != first.CreatedAtMS {
+		t.Errorf("CreatedAtMS changed: %d -> %d", first.CreatedAtMS, advanced.CreatedAtMS)
+	}
+	if advanced.PublishedAtMS < first.PublishedAtMS {
+		t.Errorf("PublishedAtMS went backwards: %d -> %d", first.PublishedAtMS, advanced.PublishedAtMS)
+	}
+	if len(advanced.Components) != 3 {
+		t.Fatalf("components = %+v", advanced.Components)
+	}
+	if got := advanced.Components[1]; got.ReleaseID != codex.ID || got.Version != "0.161.0" {
+		t.Errorf("codex entry = %+v", got)
+	}
+	if got := advanced.Components[2]; got.ReleaseID != templates.ID {
+		t.Errorf("templates entry = %+v", got)
+	}
+
+	// 推进后的 BOM 必须能重新签名，且带的是推进后的三个组件。
+	encoded, err := fixture.service.SignedDistribution("stable", "1.2.0")
+	if err != nil {
+		t.Fatalf("signed distribution: %v", err)
+	}
+	_, payload := verifyManifest(t, fixture.public, encoded)
+	if components, ok := payload["components"].([]any); !ok || len(components) != 3 {
+		t.Fatalf("signed components = %v", payload["components"])
+	}
+
+	// 产品换了：同一个产品版本下必须拒绝。
+	fixture.publish(t, model.Release{Component: model.ComponentProduct, Version: "1.3.0", Channel: "stable"})
+	_, err = fixture.service.PublishDistribution(model.Distribution{
+		Channel:        "stable",
+		ProductVersion: "1.2.0",
+		Components: []model.DistributionComponent{
+			{Name: model.ComponentProduct, Version: "1.3.0"},
+			{Name: model.ComponentCodex, Version: "0.161.0"},
+		},
+	}, "ci")
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("expected ErrValidation, got %v", err)
+	}
+}

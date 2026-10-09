@@ -446,6 +446,7 @@ syntropy_update/
 | 16 | 443 归属 | 生产 443 归升级服务（内置 ACME 自动签发/续期，走 TLS-ALPN-01，80 不必放行）；同机既有 xray REALITY 挪到 `4430` 并同步安全组与客户端。xray 换非 443 端口会提示「可能被 GFW 封 IP」，是为让出 443 付出的已知代价 | 用户确认（「xray换个端口」） |
 | 17 | 组件模型收敛为 5 行 | 受管组件只有 `product` + `codex` / `node-runtime` / `templates` / `skills`。产品一次发版装五件、共用一个版本号，靠 `slot` 区分；插件可独立升级。`browser-runtime` 移出清单（没有生产者），`node-repl` 归产品。制品键从 `(releaseID, os, arch)` 改为 `(releaseID, slot, os, arch)`，上传路由与清单都带 `slot`；服务端组件表（`internal/model`）与客户端（`component-layout.ts`）由门禁测试锁定一致 | 本次讨论（依据：`../Syntropy/docs/system-upgrade-method.md`） |
 | 18 | 发布链路只有一条 | 本地与 CI 都跑 `desktop_app` 的 `pnpm release:build`（整理发布清单）+ `pnpm release:publish`（`import-bundle -remote`，走管理面 HTTP API）。组件表、槽位与制品命名只由服务端 `bundle.PlanAssets` 一处决定，桌面端脚本不复制第二套规则；本地不再需要人碰服务端数据目录 | 本次讨论 |
+| 19 | BOM 的锚点是产品版本 | `PublishDistribution` 允许同一 `(channel, productVersion)` 被**重新发布**，条件只有一个：BOM 里的 `product` 条目与已发布的那份是同一份发布（`ReleaseID` 与版本都相同）。产品自己换了必须发新的产品版本；插件（codex / node-runtime / templates / skills）各有版本号，可以随时单独发布并推进 BOM。推进保留 `CreatedAtMS`、刷新 `PublishedAtMS`，审计记 `distribution.update`——不可变的是「产品这一格」，不是整份文档 | 本次讨论（规则 3「插件可单独升级」在服务端的落点） |
 
 ## 17. 实施状态（2026-10-05）
 
@@ -734,3 +735,23 @@ POST 路径与请求体、DELETE 撤销、目标 id / 组件名的 URL 编码、
   错误码映射回 `ErrValidation` / `ErrNotFound`。**实测到一次真实缺陷**：`http.Transport`
   发送完会关闭请求体，而 `bundle.Import` 之后还要自己关那个文件（本地后端不关），
   于是远端路径会冒 `file already closed`；客户端因此用「只读不关」的壳包一层请求体。
+
+### 17.5 内容组件进渠道与 BOM 锚点（2026-10-09）
+
+- **BOM 锚点**：`internal/release/distribution.go` 的 `PublishDistribution` 允许同一
+  `(channel, productVersion)` 重新发布，条件只有一个——BOM 里的 `product` 条目是同一份发布
+  （`sameProductRelease`）。产品换了仍然报 `ErrValidation`（请升产品版本），插件换了直接推进：
+  保留 `CreatedAtMS`、刷新 `PublishedAtMS`，审计记 `distribution.update`。回归
+  `TestPublishDistributionAdvancesPluginsOnly`；`internal/bundle` 的
+  `TestImportSurfacesDistributionConflict` 只验证把服务端的拒绝透出来——规则不在灌库层复制一份。
+- **内容制品打包**：主仓库新增 `desktop_app/tools/content-archive.mjs`（自己写 ustar 头、固定
+  mtime/uid/gid/模式、条目按名字排序、gzip 头不带时间戳，于是同一份内容永远打出同样的字节），
+  `update-bundle.mjs` 按 `tools/content-release.json` 把仓库根 `data/<组件>` 打成一个
+  `<组件>-<内容版本>.tar.gz` 放进发布包。计较字节是必须的：服务端按 sha256 判定「同一版本不可
+  换字节」，而 CI 每次都是全新 checkout。
+- **生产实测（2026-10-09）**：`templates@1.0.0`（541 条目 / 197,211 字节）与 `skills@1.0.0`
+  （737 条目 / 1,419,696 字节）灌库后，`stable/0.4.3` 的 BOM 从 3 个组件推进到 5 个；重跑整份
+  发布包全部 skipped；从线上 blob 取回归档，客户端解析器解出的目录树与仓库 `data/<组件>`
+  逐字节一致。
+
+见 `docs/releases/v0.1.1.md`。

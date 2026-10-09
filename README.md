@@ -12,6 +12,9 @@ Syntropy 集群的组件分发与升级管理服务。规划中的生产域名�
   node-repl / app-server 五个槽位一起发版、共用一个版本号）加四个可独立升级的插件
   `codex` / `node-runtime` / `templates` / `skills`。制品落在产品里的哪个槽位由 `slot`
   记录，客户端据此选件。口径与门禁见 `../Syntropy/docs/system-upgrade-method.md`。
+- BOM 的锚点是产品版本：**产品换了必须发新的产品版本，插件可以随时单独发布并推进 BOM**
+  （`release.PublishDistribution` 一处实现；推进只刷新 BOM 的发布时间、保留创建时间，
+  审计记 `distribution.update`）。
 - 渠道与分发定义（BOM）：`alpha` / `beta` / `stable`。
 - 签名清单：Ed25519 签名的自更新清单与 BOM，供桌面端与安装器消费。
 - 策略与计划：灰度、维护窗口、审批口径、熔断、回滚；按库存计算升级计划。
@@ -22,6 +25,8 @@ Syntropy 集群的组件分发与升级管理服务。规划中的生产域名�
 ## 文档
 
 - [docs/design.md](docs/design.md)：总体设计（权威）。
+- [CHANGELOG.md](CHANGELOG.md) 与 [docs/releases/](docs/releases/)：版本与发布记录。
+  发布记录只写在这里，主仓库只放方法（见 `../Syntropy/docs/system-upgrade-method.md` §11）。
 
 ## 部署（systemd）
 
